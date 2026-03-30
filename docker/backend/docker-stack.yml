@@ -1,17 +1,20 @@
 version: "3.9"
 
 # Dudenest Backend — Docker Swarm Stack
-# Deploy: docker stack deploy --compose-file docker-stack.yml --with-registry-auth dudenest-backend
-# Credentials: .env file on each Swarm manager at deploy path
-# Storage: GlusterFS mounted at /mnt/gv1
+# Deploy: envsubst < docker-stack.yml | docker stack deploy --compose-file - dudenest-backend
+# Wszystkie zmienne wstrzykiwane przez GitHub Actions Secrets (envsubst przy deploy)
 
 services:
   server:
     image: ${IMAGE:-ghcr.io/dudenest/dudenest-backend:latest}
-    env_file: .env
     environment:
       - APP_ENV=production
       - PORT=8080
+      - DB_URL=${DB_URL}
+      - REDIS_URL=${REDIS_URL}
+      - JWT_SECRET=${JWT_SECRET}
+      - HEADSCALE_API_URL=${HEADSCALE_API_URL}
+      - HEADSCALE_API_KEY=${HEADSCALE_API_KEY}
     networks: [dudenest, traefik-public]
     deploy:
       replicas: 2

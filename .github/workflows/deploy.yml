@@ -72,13 +72,13 @@ jobs:
 
   # ─────────────────────────────────────────────
   # Stage 2: Deploy to NETOL Docker Swarm
-  # Runs on self-hosted runner ON pve101 (Swarm manager)
+  # Runs on self-hosted runner on Swarm manager (sydney)
   # No SSH needed — runner has local Docker socket
   # ─────────────────────────────────────────────
   deploy:
     needs: build
     if: github.ref == 'refs/heads/main'
-    runs-on: [self-hosted, netol-swarm]  # runner on pve101
+    runs-on: [self-hosted, netol-swarm]
 
     environment:
       name: production
@@ -105,6 +105,12 @@ jobs:
         env:
           IMAGE_TAG: ${{ github.sha }}
           REGISTRY: ${{ env.REGISTRY }}
+          DB_URL: ${{ secrets.DUDENEST_DB_URL }}
+          REDIS_URL: ${{ secrets.DUDENEST_REDIS_URL }}
+          REDIS_PASSWORD: ${{ secrets.DUDENEST_REDIS_PASSWORD }}
+          JWT_SECRET: ${{ secrets.DUDENEST_JWT_SECRET }}
+          HEADSCALE_API_URL: ${{ secrets.DUDENEST_HEADSCALE_API_URL }}
+          HEADSCALE_API_KEY: ${{ secrets.DUDENEST_HEADSCALE_API_KEY }}
         run: |
           export IMAGE="${REGISTRY}/dudenest/dudenest-backend:sha-${IMAGE_TAG:0:7}"
           envsubst < docker/backend/docker-stack.yml > /tmp/dudenest-stack.yml
