@@ -98,7 +98,7 @@ jobs:
         run: |
           for svc in $(docker service ls --filter name=dudenest-backend --format '{{.Name}}' 2>/dev/null); do
             state=$(docker service inspect "$svc" --format '{{.UpdateStatus.State}}' 2>/dev/null || echo "")
-            [ "$state" = "updating" ] && echo "Service updating, waiting 30s..." && sleep 30
+            if [ "$state" = "updating" ]; then echo "Service updating, waiting 30s..." && sleep 30; fi
           done
 
       - name: Deploy stack to Docker Swarm
