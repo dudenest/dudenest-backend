@@ -2,27 +2,24 @@ version: "3.9"
 
 # Dudenest Backend — Docker Swarm Stack
 # Deploy: docker stack deploy --compose-file docker-stack.yml --with-registry-auth dudenest-backend
-# IMAGE variable is injected by GitHub Actions CI: sha-<short_sha>
+# Credentials: .env file on each Swarm manager at deploy path
+# Storage: GlusterFS mounted at /mnt/gv1
 
 services:
   server:
     image: ${IMAGE:-ghcr.io/dudenest/dudenest-backend:latest}
-    networks: [dudenest, traefik-public]
+    env_file: .env
     environment:
       - APP_ENV=production
       - PORT=8080
-    secrets:
-      - dudenest_db_url
-      - dudenest_redis_url
-      - dudenest_jwt_secret
-      - dudenest_headscale_api_key
+    networks: [dudenest, traefik-public]
     deploy:
       replicas: 2
       update_config:
         parallelism: 1
         delay: 10s
         failure_action: rollback
-        order: start-first       # zero-downtime: new container starts before old stops
+        order: start-first
       rollback_config:
         parallelism: 1
         delay: 5s
@@ -39,10 +36,10 @@ services:
           memory: 128M
       labels:
         - "traefik.enable=true"
-        - "traefik.http.routers.dudenest-backend.rule=Host(`api.dudenest.com`)"
-        - "traefik.http.routers.dudenest-backend.entrypoints=websecure"
-        - "traefik.http.routers.dudenest-backend.tls=true"
-        - "traefik.http.services.dudenest-backend.loadbalancer.server.port=8080"
+        - "traefik.http.routers.dudenest-api.rule=Host(`api.dudenest.com`)"
+        - "traefik.http.routers.dudenest-api.entrypoints=websecure"
+        - "traefik.http.routers.dudenest-api.tls=true"
+        - "traefik.http.services.dudenest-api.loadbalancer.server.port=8080"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
       interval: 30s
@@ -50,18 +47,32 @@ services:
       retries: 3
       start_period: 10s
 
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - redis-storage:/data
+    networks: [dudenest]
+    deploy:
+      replicas: 1
+      update_config:
+        order: start-first
+      restart_policy:
+        condition: on-failure
+      placement:
+        constraints:
+          - node.role == manager
+
+volumes:
+  redis-storage:
+    driver: local
+    driver_opts:
+      type: none
+      device: /mnt/gv1/dudenest/redis
+      o: bind
+
 networks:
   dudenest:
     external: true
   traefik-public:
-    external: true
-
-secrets:
-  dudenest_db_url:
-    external: true
-  dudenest_redis_url:
-    external: true
-  dudenest_jwt_secret:
-    external: true
-  dudenest_headscale_api_key:
     external: true
