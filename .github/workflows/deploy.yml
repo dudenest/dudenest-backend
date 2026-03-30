@@ -1,0 +1,125 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ghcr.io/dudenest/dudenest-backend
+
+jobs:
+  # ─────────────────────────────────────────────
+  # Stage 1: Build + Test (GitHub-hosted runner)
+  # No SSH keys needed — runs on GitHub infra
+  # ─────────────────────────────────────────────
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write  # needed for GHCR push
+
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tags }}
+      image_digest: ${{ steps.build.outputs.digest }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+
+      - name: Run tests
+        run: go test ./... -v -race -coverprofile=coverage.out
+
+      - name: Log in to GHCR
+        if: github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}  # built-in token — no manual secret
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,prefix=sha-,format=short
+            type=ref,event=branch
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: ${{ github.ref == 'refs/heads/main' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64,linux/arm64
+
+  # ─────────────────────────────────────────────
+  # Stage 2: Deploy to NETOL Docker Swarm
+  # Runs on self-hosted runner ON pve101 (Swarm manager)
+  # No SSH needed — runner has local Docker socket
+  # ─────────────────────────────────────────────
+  deploy:
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, netol-swarm]  # runner on pve101
+
+    environment:
+      name: production
+      url: https://api.dudenest.com
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR (for pulling on Swarm)
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Wait for any in-progress updates
+        run: |
+          for svc in $(docker service ls --filter name=dudenest-backend --format '{{.Name}}' 2>/dev/null); do
+            state=$(docker service inspect "$svc" --format '{{.UpdateStatus.State}}' 2>/dev/null || echo "")
+            [ "$state" = "updating" ] && echo "Service updating, waiting 30s..." && sleep 30
+          done
+
+      - name: Deploy stack to Docker Swarm
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+          REGISTRY: ${{ env.REGISTRY }}
+        run: |
+          export IMAGE="${REGISTRY}/dudenest/dudenest-backend:sha-${IMAGE_TAG:0:7}"
+          envsubst < docker/backend/docker-stack.yml > /tmp/dudenest-stack.yml
+          docker stack deploy \
+            --compose-file /tmp/dudenest-stack.yml \
+            --with-registry-auth \
+            --resolve-image always \
+            dudenest-backend
+
+      - name: Verify deployment
+        run: |
+          echo "Waiting 15s for Swarm to converge..."
+          sleep 15
+          docker stack ps dudenest-backend --no-trunc
+          docker service ls | grep dudenest-backend
+          REPLICAS=$(docker service inspect dudenest-backend_server --format '{{.Spec.Mode.Replicated.Replicas}}' 2>/dev/null || echo "0")
+          RUNNING=$(docker service ls --filter name=dudenest-backend_server --format '{{.Replicas}}' | cut -d'/' -f1)
+          echo "Running: $RUNNING / $REPLICAS"
