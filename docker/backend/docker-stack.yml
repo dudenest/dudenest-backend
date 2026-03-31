@@ -15,7 +15,7 @@ services:
       - JWT_SECRET=${JWT_SECRET}
       - HEADSCALE_API_URL=${HEADSCALE_API_URL}
       - HEADSCALE_API_KEY=${HEADSCALE_API_KEY}
-    networks: [dudenest, traefik-public]
+    networks: [dudenest, proxy-netol-prod]
     deploy:
       replicas: 2
       update_config:
@@ -39,6 +39,7 @@ services:
           memory: 128M
       labels:
         - "traefik.enable=true"
+        - "traefik.docker.network=PROXY_NETOL_PROD"
         - "traefik.http.routers.dudenest-api.rule=Host(`api.dudenest.com`)"
         - "traefik.http.routers.dudenest-api.entrypoints=web"
         - "traefik.http.services.dudenest-api.loadbalancer.server.port=8080"
@@ -76,5 +77,6 @@ volumes:
 networks:
   dudenest:
     external: true
-  traefik-public:
+  proxy-netol-prod:
     external: true
+    name: PROXY_NETOL_PROD
