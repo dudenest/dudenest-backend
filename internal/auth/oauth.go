@@ -46,7 +46,9 @@ func decodeState(state string) (provider, returnURL string) {
 	if err != nil { return "", appURL }
 	var m map[string]string
 	if err := json.Unmarshal(raw, &m); err != nil { return "", appURL }
-	return m["p"], m["r"]
+	r := m["r"]
+	if r == "" { r = appURL }
+	return m["p"], r
 }
 
 func callbackRedirect(w http.ResponseWriter, r *http.Request, returnURL string, c Claims) {
