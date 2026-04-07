@@ -111,6 +111,12 @@ jobs:
           JWT_SECRET: ${{ secrets.DUDENEST_JWT_SECRET }}
           HEADSCALE_API_URL: ${{ secrets.DUDENEST_HEADSCALE_API_URL }}
           HEADSCALE_API_KEY: ${{ secrets.DUDENEST_HEADSCALE_API_KEY }}
+          APP_URL: ${{ vars.DUDENEST_APP_URL || 'https://dudenest.com' }}
+          GOOGLE_CLIENT_ID: ${{ secrets.DUDENEST_GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.DUDENEST_GOOGLE_CLIENT_SECRET }}
+          GITHUB_CLIENT_ID: ${{ secrets.DUDENEST_GITHUB_CLIENT_ID }}
+          GITHUB_CLIENT_SECRET: ${{ secrets.DUDENEST_GITHUB_CLIENT_SECRET }}
+          APPLE_CLIENT_ID: ${{ secrets.DUDENEST_APPLE_CLIENT_ID }}
         run: |
           export IMAGE="${REGISTRY}/dudenest/dudenest-backend:sha-${IMAGE_TAG:0:7}"
           envsubst < docker/backend/docker-stack.yml > /tmp/dudenest-stack.yml

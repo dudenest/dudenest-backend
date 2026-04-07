@@ -15,6 +15,12 @@ services:
       - JWT_SECRET=${JWT_SECRET}
       - HEADSCALE_API_URL=${HEADSCALE_API_URL}
       - HEADSCALE_API_KEY=${HEADSCALE_API_KEY}
+      - APP_URL=${APP_URL:-https://dudenest.com}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
+      - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}
+      - APPLE_CLIENT_ID=${APPLE_CLIENT_ID}
     networks: [dudenest, proxy-netol-prod]
     deploy:
       replicas: 2

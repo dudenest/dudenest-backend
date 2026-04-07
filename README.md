@@ -45,43 +45,60 @@ dudenest-backend (this service)
 **Domain**: api.dudenest.com (planned)
 **Headscale**: headscale.netol.io (existing, shared with NETOL)
 
-## API Overview
+## API — Implemented
 
-### Authentication
+### Health
 ```
-POST /api/v1/auth/register
-POST /api/v1/auth/login
-POST /api/v1/auth/refresh
-POST /api/v1/auth/oauth/google
-POST /api/v1/auth/oauth/apple
+GET /health   → {"status":"ok","uptime":"...","service":"dudenest-backend"}
 ```
 
-### Files (Metadata)
+### Auth (OAuth2 redirect flow)
 ```
-GET    /api/v1/files           # List files (paginated, date range)
-GET    /api/v1/files/:id       # Get file metadata
-POST   /api/v1/files           # Register new file (from Relay)
-PUT    /api/v1/files/:id       # Update metadata (tags, albums)
-DELETE /api/v1/files/:id       # Delete file record
-GET    /api/v1/files/timeline  # Timeline view (grouped by date)
-GET    /api/v1/files/search    # Search by date/location/tag/face
+GET /auth/google                   → redirect to Google OAuth
+GET /auth/github                   → redirect to GitHub OAuth
+GET /auth/apple                    → redirect to Apple OAuth
+GET /auth/callback/google          → exchange code → issue JWT → redirect to app
+GET /auth/callback/github          → exchange code → issue JWT → redirect to app
 ```
 
-### Relay
+OAuth callback redirects to `$APP_URL?token=JWT&user=base64(JSON)`.
+
+JWT: HS256, 30-day expiry, payload: `{sub, email, name, avatar, provider, iat, exp}`.
+
+### Not implemented yet
 ```
-POST   /api/v1/relay/register      # Register new Relay
-GET    /api/v1/relay/status        # Get relay status
-GET    /api/v1/relay/headscale-key # Get Headscale auth key for Relay
-DELETE /api/v1/relay/:id           # Unregister Relay
+/api/v1/*    → 501 Not Implemented
 ```
 
-### Storage Accounts
-```
-GET    /api/v1/storage/accounts    # List user's cloud accounts (no tokens)
-POST   /api/v1/storage/accounts    # Add new storage account
-DELETE /api/v1/storage/accounts/:id
-GET    /api/v1/storage/capacity    # Total available capacity
-```
+## Environment Variables
+
+| Variable | Required | Example | Description |
+|----------|----------|---------|-------------|
+| `JWT_SECRET` | yes | `changeme-32chars` | HS256 signing key |
+| `APP_URL` | yes | `https://dudenest.com` | Where to redirect after auth |
+| `GOOGLE_CLIENT_ID` | OAuth | `123.apps.googleusercontent.com` | Google OAuth app |
+| `GOOGLE_CLIENT_SECRET` | OAuth | `GOCSPX-...` | Google OAuth secret |
+| `GITHUB_CLIENT_ID` | OAuth | `Ov23liXxx` | GitHub OAuth app |
+| `GITHUB_CLIENT_SECRET` | OAuth | `...` | GitHub OAuth secret |
+| `APPLE_CLIENT_ID` | OAuth | `com.dudenest.web` | Apple Service ID |
+| `PORT` | no | `8080` | HTTP port (default: 8080) |
+
+## OAuth App Setup
+
+### Google
+1. GCP Console → APIs & Services → Credentials → Create OAuth 2.0 Client
+2. Application type: Web application
+3. Authorized redirect URI: `https://api.dudenest.com/auth/callback/google`
+4. Set `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET` in GitHub Secrets
+
+### GitHub
+1. GitHub → Settings → Developer settings → OAuth Apps → New OAuth App
+2. Homepage URL: `https://dudenest.com`
+3. Authorization callback URL: `https://api.dudenest.com/auth/callback/github`
+4. Set `GITHUB_CLIENT_ID` + `GITHUB_CLIENT_SECRET` in GitHub Secrets
+
+### Apple
+Full implementation requires `APPLE_TEAM_ID`, `APPLE_KEY_ID`, `APPLE_PRIVATE_KEY` + POST callback (Apple sends `form_post`). See `internal/auth/oauth.go`.
 
 ## Project Structure
 
