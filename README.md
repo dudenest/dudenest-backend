@@ -167,4 +167,3 @@ Apache License 2.0
 
 **Author**: Dariusz Porczyński
 **Organization**: https://github.com/dudenest
- 
