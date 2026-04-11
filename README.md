@@ -1,5 +1,7 @@
 # dudenest-backend
 
+![Version](https://img.shields.io/badge/Version-v0.4.1-blue) ![Last Update](https://img.shields.io/badge/Update-2026--04--12-lightgrey)
+
 ![Status](https://img.shields.io/badge/Status-Pre--Alpha-orange) ![Language](https://img.shields.io/badge/Language-Go-00ADD8) ![License](https://img.shields.io/badge/License-Apache%202.0-green) ![Infra](https://img.shields.io/badge/Infra-NETOL%20Docker%20Swarm-blue)
 
 **The SaaS backend for Dudenest — metadata, auth, signaling. Zero file content.**
@@ -167,3 +169,13 @@ Apache License 2.0
 
 **Author**: Dariusz Porczyński
 **Organization**: https://github.com/dudenest
+
+## Changelog
+
+### v0.4.1 — 2026-04-12 — Release Sync
+- 📦 **Ecosystem Sync**: Unified versioning across all components.
+- 🚀 **GitHub Release**: First official release for backend.
+
+### v0.4.0 — 2026-04-11 — Security & Auth
+- 🔐 **Shared JWT Secret**: Enabled JWT signature sharing for Relay validation.
+- 🔑 **Backend-as-Auth-Server**: Centralized token issuing for federated Relay access.
