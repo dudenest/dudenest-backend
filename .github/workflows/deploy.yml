@@ -2,9 +2,9 @@ name: Build and Deploy
 
 on:
   push:
-    branches: [main]
+    branches: [main, feat/storage-replica]
   pull_request:
-    branches: [main]
+    branches: [main, feat/storage-replica]
 
 env:
   REGISTRY: ghcr.io
