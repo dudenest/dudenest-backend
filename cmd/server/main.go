@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -23,6 +24,8 @@ func main() {
 	mux.HandleFunc("/health", handleHealth)
 	auth.RegisterRoutes(mux)
 	mux.HandleFunc("/api/v1/relay/setup-email", requireAuth(makeRelaySetupEmail(emailClient)))
+	mux.HandleFunc("/api/v1/relays", requireAuth(makeBackupProxy("/user/relays")))
+	mux.HandleFunc("/api/v1/relays/", requireAuth(makeBackupProxy("/user/relays/")))
 	mux.HandleFunc("/api/v1/", handleNotImplemented)
 	log.Printf("dudenest-backend starting on :%s", port)
 	if err := http.ListenAndServe(":"+port, corsMiddleware(mux)); err != nil { log.Fatal(err) }
@@ -122,4 +125,36 @@ func handleNotImplemented(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusNotImplemented)
 	json.NewEncoder(w).Encode(map[string]string{"error": "not implemented yet"})
+}
+
+// makeBackupProxy proxies authenticated Flutter requests to dudenest-backup.
+// backupPath is the path prefix on the backup service (e.g. "/user/relays").
+// BACKUP_URL env var must be set (e.g. "http://dudenest-backup:8087").
+func makeBackupProxy(backupPath string) http.HandlerFunc {
+	backupURL := os.Getenv("BACKUP_URL")
+	return func(w http.ResponseWriter, r *http.Request) {
+		if backupURL == "" {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			json.NewEncoder(w).Encode(map[string]string{"error": "backup service not configured"}) //nolint:errcheck
+			return
+		}
+		// Build target URL: replace /api/v1/relays prefix with backup path
+		suffix := strings.TrimPrefix(r.URL.Path, "/api/v1/relays")
+		target := backupURL + backupPath + suffix
+		req, err := http.NewRequestWithContext(r.Context(), r.Method, target, r.Body)
+		if err != nil { w.WriteHeader(500); return }
+		req.Header.Set("Authorization", r.Header.Get("Authorization")) // forward JWT
+		req.Header.Set("Content-Type", r.Header.Get("Content-Type"))
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			log.Printf("backup proxy error: %v", err)
+			w.WriteHeader(http.StatusBadGateway)
+			json.NewEncoder(w).Encode(map[string]string{"error": "backup unavailable"}) //nolint:errcheck
+			return
+		}
+		defer resp.Body.Close()
+		w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+		w.WriteHeader(resp.StatusCode)
+		io.Copy(w, resp.Body) //nolint:errcheck
+	}
 }
