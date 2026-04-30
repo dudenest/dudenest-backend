@@ -25,6 +25,9 @@ services:
     networks: [dudenest, proxy-netol-prod]
     deploy:
       replicas: 2
+      placement:
+        constraints:
+          - node.role == manager  # only run on main Swarm managers (node001-005), not sydney/canada workers
       update_config:
         parallelism: 1
         delay: 10s
