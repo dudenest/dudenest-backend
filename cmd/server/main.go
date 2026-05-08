@@ -24,6 +24,7 @@ func main() {
 	mux.HandleFunc("/health", handleHealth)
 	auth.RegisterRoutes(mux)
 	mux.HandleFunc("/api/v1/relay/setup-email", requireAuth(makeRelaySetupEmail(emailClient)))
+	mux.HandleFunc("/api/v1/relay/install-config", requireAuth(handleRelayInstallConfig))
 	mux.HandleFunc("/api/v1/relays", requireAuth(makeBackupProxy("/user/relays")))
 	mux.HandleFunc("/api/v1/relays/", requireAuth(makeBackupProxy("/user/relays/")))
 	mux.HandleFunc("/api/v1/", handleNotImplemented)
@@ -119,6 +120,26 @@ func makeRelaySetupEmail(ec *email.Client) http.HandlerFunc {
 		}
 		json.NewEncoder(w).Encode(map[string]string{"status": "sent", "resend_id": id})
 	}
+}
+
+// handleRelayInstallConfig returns relay installer configuration for authenticated user.
+// Flutter calls this to show the install command in the "Add Relay" screen.
+// Returns: jwt_secret, backup_url, install_cmd (one-liner curl command with env vars).
+// Security: JWT_SECRET exposure is intentional here — only authenticated users reach this
+// endpoint, and relay needs the same secret to validate Flutter JWTs.
+func handleRelayInstallConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet { w.WriteHeader(http.StatusMethodNotAllowed); return }
+	jwtSecret := os.Getenv("DUDENEST_JWT_SECRET")
+	backupURL := os.Getenv("BACKUP_URL")
+	if backupURL == "" { backupURL = "https://backup.dudenest.com" }
+	installCmd := "curl -sSL https://raw.githubusercontent.com/dudenest/dudenest-relay/main/scripts/install.sh | " +
+		"DUDENEST_JWT_SECRET=" + jwtSecret + " BACKUP_URL=" + backupURL + " bash"
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{ //nolint:errcheck
+		"jwt_secret":  jwtSecret,
+		"backup_url":  backupURL,
+		"install_cmd": installCmd,
+	})
 }
 
 func handleNotImplemented(w http.ResponseWriter, r *http.Request) {
