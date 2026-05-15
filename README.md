@@ -12,7 +12,7 @@ The Dudenest Backend is the central coordination layer. It handles user authenti
 
 ### ✅ DOES
 - User authentication (email/password, Google OAuth, Apple Sign-in)
-- File metadata storage (name, date, GPS, tags, thumbnail ID, block count)
+- File metadata storage (name, date, GPS, tags, thumbnail ID, size)
 - Relay registration and signaling (Headscale coordination)
 - Storage account registry (which cloud accounts does user have, NOT tokens)
 - Relay rental marketplace (users renting spare Relay capacity)
