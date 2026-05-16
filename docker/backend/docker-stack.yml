@@ -60,6 +60,13 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    logging:
+      driver: gelf
+      options:
+        gelf-address: "udp://10.51.1.252:12201"
+        tag: "dudenest-backend"
+        gelf-compression-type: gzip
+        labels: "com.docker.stack.namespace,com.docker.swarm.service.name"
 
   redis:
     image: redis:7-alpine
@@ -76,6 +83,13 @@ services:
       placement:
         constraints:
           - node.role == manager
+    logging:
+      driver: gelf
+      options:
+        gelf-address: "udp://10.51.1.252:12201"
+        tag: "dudenest-redis"
+        gelf-compression-type: gzip
+        labels: "com.docker.stack.namespace,com.docker.swarm.service.name"
 
 volumes:
   redis-storage:
