@@ -15,7 +15,22 @@ import (
 
 var startTime = time.Now()
 
+// requireEnv aborts startup if any required env var is empty. Prevents the s313 incident pattern:
+// a bare `docker stack deploy` with a minimal YAML wiped all Env[] entries and backend kept running
+// with empty values, silently returning 503 "Google OAuth not configured" on every login.
+// Fail-fast → container crashloop → Swarm rolls back to previous good spec.
+func requireEnv(keys ...string) {
+	var missing []string
+	for _, k := range keys {
+		if os.Getenv(k) == "" { missing = append(missing, k) }
+	}
+	if len(missing) > 0 {
+		log.Fatalf("FATAL: required env vars missing: %s — refusing to start with partial config (s313 guard)", strings.Join(missing, ", "))
+	}
+}
+
 func main() {
+	requireEnv("JWT_SECRET", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "BACKUP_URL") // s313 fail-fast: production needs these or login + relay flow is broken
 	port := os.Getenv("PORT")
 	if port == "" { port = "8080" }
 	emailClient, err := email.New()

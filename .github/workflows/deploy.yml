@@ -138,3 +138,21 @@ jobs:
           REPLICAS=$(docker service inspect dudenest-backend_server --format '{{.Spec.Mode.Replicated.Replicas}}' 2>/dev/null || echo "0")
           RUNNING=$(docker service ls --filter name=dudenest-backend_server --format '{{.Replicas}}' | cut -d'/' -f1)
           echo "Running: $RUNNING / $REPLICAS"
+
+      - name: Smoke test — OAuth endpoint must redirect (s313 prevention)
+        # Catches "Google OAuth not configured" 503 — symptom of a deploy that wiped env vars.
+        # If the smoke test fails the workflow fails red, alerting the operator to investigate
+        # before users hit the broken endpoint. Does NOT auto-rollback (Swarm with start-first
+        # already keeps the old replica alive until new one is healthy).
+        run: |
+          set +e
+          for i in 1 2 3 4 5 6; do
+            CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 8 "https://api.dudenest.com/auth/google?return_url=https%3A%2F%2Fdudenest.com%2F")
+            echo "  attempt $i/6 — HTTP $CODE"
+            [ "$CODE" = "302" ] && { echo "✅ /auth/google redirects (env vars present)"; exit 0; }
+            sleep 10
+          done
+          echo "❌ /auth/google did not return 302 after 60s — env vars likely missing on backend service."
+          echo "Inspect: ssh root@<node> 'docker service inspect dudenest-backend_server --format \"{{range .Spec.TaskTemplate.ContainerSpec.Env}}{{println .}}{{end}}\"'"
+          echo "Fix: re-run this workflow with all DUDENEST_* secrets present, or re-deploy via envsubst from a clean shell."
+          exit 1
