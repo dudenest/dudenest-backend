@@ -6,7 +6,7 @@ version: "3.9"
 
 services:
   server:
-    image: ${IMAGE:-ghcr.io/dudenest/dudenest-backend:latest}
+    image: ${IMAGE:-registry.netol.io/dudenest/dudenest-backend:latest}  # s323: internal mirror
     environment:
       - APP_ENV=production
       - PORT=8080

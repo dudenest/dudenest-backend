@@ -102,6 +102,24 @@ jobs:
             if [ "$state" = "updating" ]; then echo "Service updating, waiting 30s..." && sleep 30; fi
           done
 
+      - name: Mirror to registry.netol.io (s323 — eliminates ghcr SPOF at runtime)
+        env:
+          REGISTRY_NETOL_TOKEN: ${{ secrets.GITLAB_NETOL_TOKEN }}
+          REGISTRY_NETOL_USER: ${{ secrets.GITLAB_NETOL_USER }}
+          MIRROR_NAME: dudenest/dudenest-backend
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker pull ${{ env.IMAGE_NAME }}:sha-$(echo $IMAGE_TAG | cut -c1-7) 2>/dev/null \
+            || docker pull ${{ env.IMAGE_NAME }}:${IMAGE_TAG}
+          SOURCE=$(docker images --format '{{.Repository}}:{{.Tag}}' | grep dudenest-backend | head -1)
+          echo "Source image: $SOURCE"
+          echo "$REGISTRY_NETOL_TOKEN" | docker login registry.netol.io -u "$REGISTRY_NETOL_USER" --password-stdin
+          docker tag "$SOURCE" registry.netol.io/${MIRROR_NAME}:sha-$(echo $IMAGE_TAG | cut -c1-7)
+          docker tag "$SOURCE" registry.netol.io/${MIRROR_NAME}:latest
+          docker push registry.netol.io/${MIRROR_NAME}:sha-$(echo $IMAGE_TAG | cut -c1-7)
+          docker push registry.netol.io/${MIRROR_NAME}:latest
+          echo "✅ mirrored to registry.netol.io/${MIRROR_NAME}"
+
       - name: Deploy stack to Docker Swarm
         env:
           IMAGE_TAG: ${{ github.sha }}
