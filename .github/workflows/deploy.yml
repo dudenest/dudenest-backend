@@ -123,7 +123,7 @@ jobs:
       - name: Deploy stack to Docker Swarm
         env:
           IMAGE_TAG: ${{ github.sha }}
-          REGISTRY: ${{ env.REGISTRY }}
+          DEPLOY_REGISTRY: registry.netol.io  # s330: pull from mirror, not ghcr — eliminates ghcr SPOF + visaroy token dependency at Swarm runtime
           DB_URL: ${{ secrets.DUDENEST_DB_URL }}
           REDIS_URL: ${{ secrets.DUDENEST_REDIS_URL }}
           REDIS_PASSWORD: ${{ secrets.DUDENEST_REDIS_PASSWORD }}
@@ -139,7 +139,7 @@ jobs:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           BACKUP_URL: ${{ secrets.BACKUP_URL }}
         run: |
-          export IMAGE="${REGISTRY}/dudenest/dudenest-backend:sha-${IMAGE_TAG:0:7}"
+          export IMAGE="${DEPLOY_REGISTRY}/dudenest/dudenest-backend:sha-${IMAGE_TAG:0:7}"  # s330: from mirror, not ghcr
           envsubst < docker/backend/docker-stack.yml > /tmp/dudenest-stack.yml
           docker stack deploy \
             --compose-file /tmp/dudenest-stack.yml \
