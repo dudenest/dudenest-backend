@@ -104,8 +104,8 @@ jobs:
 
       - name: Mirror to registry.netol.io (s323 — eliminates ghcr SPOF at runtime)
         env:
-          REGISTRY_NETOL_TOKEN: ${{ secrets.GITLAB_NETOL_TOKEN }}
-          REGISTRY_NETOL_USER: ${{ secrets.GITLAB_NETOL_USER }}
+          REGISTRY_NETOL_TOKEN: ${{ secrets.GITLAB_NETOL_IO_TOKEN }}
+          REGISTRY_NETOL_USER: ${{ secrets.GITLAB_NETOL_IO_USER }}
           MIRROR_NAME: dudenest/dudenest-backend
           IMAGE_TAG: ${{ github.sha }}
         run: |
