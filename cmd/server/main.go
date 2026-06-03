@@ -29,8 +29,15 @@ func requireEnv(keys ...string) {
 	}
 }
 
+// hubURL returns the dudenest-hub service URL (s334: HUB_URL primary, BACKUP_URL fallback for backward-compat through 1-2 release cycle).
+func hubURL() string {
+	if u := os.Getenv("HUB_URL"); u != "" { return u }
+	return os.Getenv("BACKUP_URL")
+}
+
 func main() {
-	requireEnv("JWT_SECRET", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "BACKUP_URL") // s313 fail-fast: production needs these or login + relay flow is broken
+	requireEnv("JWT_SECRET", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET") // s313 fail-fast: production needs these or login + relay flow is broken
+	if hubURL() == "" { log.Fatal("FATAL: HUB_URL (or legacy BACKUP_URL) must be set — refusing to start (s313 guard)") } // s334: dual-name fail-fast
 	port := os.Getenv("PORT")
 	if port == "" { port = "8080" }
 	emailClient, err := email.New()
@@ -139,20 +146,21 @@ func makeRelaySetupEmail(ec *email.Client) http.HandlerFunc {
 
 // handleRelayInstallConfig returns relay installer configuration for authenticated user.
 // Flutter calls this to show the install command in the "Add Relay" screen.
-// Returns: jwt_secret, backup_url, install_cmd (one-liner curl command with env vars).
+// Returns: jwt_secret, hub_url (s334; backup_url alias for old relays), install_cmd.
 // Security: JWT_SECRET exposure is intentional here — only authenticated users reach this
 // endpoint, and relay needs the same secret to validate Flutter JWTs.
 func handleRelayInstallConfig(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet { w.WriteHeader(http.StatusMethodNotAllowed); return }
 	jwtSecret := os.Getenv("DUDENEST_JWT_SECRET")
-	backupURL := os.Getenv("BACKUP_URL")
-	if backupURL == "" { backupURL = "https://backup.dudenest.com" }
+	hub := hubURL()
+	if hub == "" { hub = "https://hub.dudenest.com" } // s334: default → new URL
 	installCmd := "curl -sSL https://raw.githubusercontent.com/dudenest/dudenest-relay/main/scripts/install.sh | " +
-		"DUDENEST_JWT_SECRET=" + jwtSecret + " BACKUP_URL=" + backupURL + " bash"
+		"DUDENEST_JWT_SECRET=" + jwtSecret + " HUB_URL=" + hub + " BACKUP_URL=" + hub + " bash" // s334: both vars for backward-compat with old relay binaries (BACKUP_URL alias removed after 30-day grace)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{ //nolint:errcheck
 		"jwt_secret":  jwtSecret,
-		"backup_url":  backupURL,
+		"hub_url":     hub,
+		"backup_url":  hub, // s334: alias for backward-compat with old relay binaries; remove after grace period
 		"install_cmd": installCmd,
 	})
 }
@@ -163,29 +171,29 @@ func handleNotImplemented(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"error": "not implemented yet"})
 }
 
-// makeBackupProxy proxies authenticated Flutter requests to dudenest-backup.
-// backupPath is the path prefix on the backup service (e.g. "/user/relays").
-// BACKUP_URL env var must be set (e.g. "http://dudenest-backup:8087").
-func makeBackupProxy(backupPath string) http.HandlerFunc {
-	backupURL := os.Getenv("BACKUP_URL")
+// makeHubProxy proxies authenticated Flutter requests to dudenest-hub (s334: renamed from makeBackupProxy).
+// hubPath is the path prefix on the hub service (e.g. "/user/relays").
+// HUB_URL env var must be set (or legacy BACKUP_URL for backward-compat — e.g. "http://dudenest-hub_hub:8087").
+func makeBackupProxy(hubPath string) http.HandlerFunc { // s334: function name kept for caller compat; logic uses hubURL()
+	hub := hubURL()
 	return func(w http.ResponseWriter, r *http.Request) {
-		if backupURL == "" {
+		if hub == "" {
 			w.WriteHeader(http.StatusServiceUnavailable)
-			json.NewEncoder(w).Encode(map[string]string{"error": "backup service not configured"}) //nolint:errcheck
+			json.NewEncoder(w).Encode(map[string]string{"error": "hub service not configured"}) //nolint:errcheck
 			return
 		}
-		// Build target URL: replace /api/v1/relays prefix with backup path
+		// Build target URL: replace /api/v1/relays prefix with hub path
 		suffix := strings.TrimPrefix(r.URL.Path, "/api/v1/relays")
-		target := backupURL + backupPath + suffix
+		target := hub + hubPath + suffix
 		req, err := http.NewRequestWithContext(r.Context(), r.Method, target, r.Body)
 		if err != nil { w.WriteHeader(500); return }
 		req.Header.Set("Authorization", r.Header.Get("Authorization")) // forward JWT
 		req.Header.Set("Content-Type", r.Header.Get("Content-Type"))
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
-			log.Printf("backup proxy error: %v", err)
+			log.Printf("hub proxy error: %v", err)
 			w.WriteHeader(http.StatusBadGateway)
-			json.NewEncoder(w).Encode(map[string]string{"error": "backup unavailable"}) //nolint:errcheck
+			json.NewEncoder(w).Encode(map[string]string{"error": "hub unavailable"}) //nolint:errcheck
 			return
 		}
 		defer resp.Body.Close()

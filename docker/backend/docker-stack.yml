@@ -22,7 +22,8 @@ services:
       - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}
       - APPLE_CLIENT_ID=${APPLE_CLIENT_ID}
       - RESEND_API_KEY=${RESEND_API_KEY}
-      - BACKUP_URL=${BACKUP_URL:-http://dudenest-backup_backup:8087}
+      - HUB_URL=${HUB_URL:-http://dudenest-hub_hub:8087}   # s334: rename BACKUP_URL → HUB_URL, default to new Swarm DNS
+      - BACKUP_URL=${HUB_URL:-http://dudenest-hub_hub:8087}   # s334: backward-compat alias for old relay binaries (remove after grace)
     networks: [dudenest, proxy-netol-prod]
     deploy:
       replicas: 2
