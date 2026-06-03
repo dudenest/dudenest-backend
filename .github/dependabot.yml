@@ -1,0 +1,27 @@
+# Dependabot config (s333) — automatyczne PRs dla aktualizacji GitHub Actions + Go modules.
+# Cel: zapobiec regresji typu "Node.js 20 deprecation" (gdy actions z node20 są removed 2026-09-16).
+# Konfiguracja na poziomie repo (orgs nie wspierają global dependabot policy).
+
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "⬆️ ci"
+    groups:
+      docker-actions:
+        patterns: ["docker/*"]
+      actions-actions:
+        patterns: ["actions/*"]
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "⬆️ deps(go)"
