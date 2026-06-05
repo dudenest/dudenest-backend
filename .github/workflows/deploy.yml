@@ -138,7 +138,7 @@ jobs:
           GITHUB_CLIENT_SECRET: ${{ secrets.DUDENEST_GITHUB_CLIENT_SECRET }}
           APPLE_CLIENT_ID: ${{ secrets.DUDENEST_APPLE_CLIENT_ID }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-          HUB_URL: ${{ secrets.HUB_URL || secrets.BACKUP_URL }}   # s334: HUB_URL primary, BACKUP_URL fallback (rotate secret name later)
+          # s337: HUB_URL intentionally NOT injected from secrets — stack file default `${HUB_URL:-http://dudenest-hub_hub:8087}` provides correct internal Swarm DNS. Injection from secrets caused s337 incident (stale value `http://dudenest-backup_backup:8087` from pre-s334 era persisted in secrets, overrode stack default, broke backend→hub proxy for 2+ days post-s334 cutover. Users prcznsk+darek got broken relay data.)
         run: |
           export IMAGE="${DEPLOY_REGISTRY}/dudenest/dudenest-backend:sha-${IMAGE_TAG:0:7}"  # s330: from mirror, not ghcr
           envsubst < docker/backend/docker-stack.yml > /tmp/dudenest-stack.yml

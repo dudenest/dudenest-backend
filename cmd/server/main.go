@@ -44,6 +44,7 @@ func main() {
 	if err != nil { log.Printf("warn: email client not available: %v", err) }
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", handleHealth)
+	mux.HandleFunc("/health/deep", handleHealthDeep) // s337: end-to-end probe — verifies backend → hub proxy chain (catches stale URL config like s337 incident)
 	auth.RegisterRoutes(mux)
 	mux.HandleFunc("/api/v1/relay/setup-email", requireAuth(makeRelaySetupEmail(emailClient)))
 	mux.HandleFunc("/api/v1/relay/install-config", requireAuth(handleRelayInstallConfig))
@@ -97,6 +98,39 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		"status": "ok", "uptime": time.Since(startTime).String(), "service": "dudenest-backend",
+	})
+}
+
+// handleHealthDeep verifies backend → hub proxy chain end-to-end (s337).
+// Why: shallow /health returned 200 for 2+ days while backend was misconfigured
+// to call dudenest-backup_backup (stale service name post-s334 rename), silently
+// breaking /api/v1/relays for all users. This probe catches that class of bug.
+// Returns 200 only if hub /health is reachable + responds with status=ok.
+// Uptime Kuma should monitor THIS endpoint, not /health.
+func handleHealthDeep(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	hub := hubURL()
+	if hub == "" {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(map[string]any{"status": "fail", "reason": "HUB_URL not configured"}) //nolint:errcheck
+		return
+	}
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get(hub + "/health")
+	if err != nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(map[string]any{"status": "fail", "reason": "hub unreachable", "hub_url": hub, "error": err.Error()}) //nolint:errcheck
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(map[string]any{"status": "fail", "reason": "hub unhealthy", "hub_status": resp.StatusCode}) //nolint:errcheck
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
+		"status": "ok", "uptime": time.Since(startTime).String(), "service": "dudenest-backend",
+		"hub_url": hub, "hub_status": "ok",
 	})
 }
 
