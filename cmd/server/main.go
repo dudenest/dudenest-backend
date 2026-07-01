@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"io"
 	"log"
@@ -9,8 +10,11 @@ import (
 	"strings"
 	"time"
 
+	_ "github.com/lib/pq" // CRDB/postgres driver for the HUB-DECOUPLING relays store
+
 	"github.com/dudenest/dudenest-backend/internal/auth"
 	"github.com/dudenest/dudenest-backend/internal/email"
+	"github.com/dudenest/dudenest-backend/internal/relays"
 )
 
 var startTime = time.Now()
@@ -50,6 +54,19 @@ func main() {
 	mux.HandleFunc("/api/v1/relay/install-config", requireAuth(handleRelayInstallConfig))
 	mux.HandleFunc("/api/v1/relays", requireAuth(makeBackupProxy("/user/relays")))
 	mux.HandleFunc("/api/v1/relays/", requireAuth(makeBackupProxy("/user/relays/")))
+	// s363 HUB-DECOUPLING Phase 1 (SHADOW, not the live path): when CRDB_DSN is set,
+	// expose a parallel /api/v1/_relays_crdb served straight from CRDB so its bytes can
+	// be diffed against the hub-proxied /api/v1/relays BEFORE flipping the live route.
+	// CRDB_DSN is unset in production today → this block is dormant and safe to ship.
+	if dsn := os.Getenv("CRDB_DSN"); dsn != "" {
+		db, err := sql.Open("postgres", dsn)
+		if err != nil {
+			log.Fatalf("FATAL: CRDB_DSN set but sql.Open failed: %v", err)
+		}
+		relayStore := relays.NewSQLStore(db)
+		mux.HandleFunc("/api/v1/_relays_crdb", requireAuth(relays.MyRelaysHandler(relayStore)))
+		log.Printf("s363: shadow CRDB relays route enabled at /api/v1/_relays_crdb")
+	}
 	mux.HandleFunc("/api/v1/", handleNotImplemented)
 	log.Printf("dudenest-backend starting on :%s", port)
 	if err := http.ListenAndServe(":"+port, corsMiddleware(mux)); err != nil { log.Fatal(err) }
@@ -84,13 +101,15 @@ func requireAuth(next http.HandlerFunc) http.HandlerFunc {
 			json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
 			return
 		}
-		_, err := auth.ValidateJWT(strings.TrimPrefix(header, "Bearer "))
+		claims, err := auth.ValidateJWT(strings.TrimPrefix(header, "Bearer "))
 		if err != nil {
 			w.WriteHeader(http.StatusUnauthorized)
 			json.NewEncoder(w).Encode(map[string]string{"error": "invalid token"})
 			return
 		}
-		next(w, r)
+		// s363 HUB-DECOUPLING: expose the JWT `sub` claim to handlers that read
+		// relays from CRDB directly. Additive — existing handlers ignore it.
+		next(w, r.WithContext(relays.WithUserID(r.Context(), claims.Sub)))
 	}
 }
 

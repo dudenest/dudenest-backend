@@ -24,6 +24,11 @@ services:
       - RESEND_API_KEY=${RESEND_API_KEY}
       - HUB_URL=${HUB_URL:-http://dudenest-hub_hub:8087}   # s334: rename BACKUP_URL → HUB_URL, default to new Swarm DNS
       - BACKUP_URL=${HUB_URL:-http://dudenest-hub_hub:8087}   # s334: backward-compat alias for old relay binaries (remove after grace)
+      # s364 HUB-DECOUPLING: DORMANT until cutover. Empty default → backend leaves the
+      # CRDB shadow route (/api/v1/_relays_crdb) disabled; NO crashloop. At cutover:
+      # add GitHub secret DUDENEST_CRDB_DSN (backend_ro user, GRANT SELECT ON relays)
+      # and export CRDB_DSN in deploy.yml so envsubst fills it. Do NOT set until backend_ro exists.
+      - CRDB_DSN=${CRDB_DSN:-}
     networks: [dudenest, proxy-netol-prod]
     deploy:
       replicas: 2
