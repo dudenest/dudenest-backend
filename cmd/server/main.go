@@ -52,20 +52,22 @@ func main() {
 	auth.RegisterRoutes(mux)
 	mux.HandleFunc("/api/v1/relay/setup-email", requireAuth(makeRelaySetupEmail(emailClient)))
 	mux.HandleFunc("/api/v1/relay/install-config", requireAuth(handleRelayInstallConfig))
-	mux.HandleFunc("/api/v1/relays", requireAuth(makeBackupProxy("/user/relays")))
-	mux.HandleFunc("/api/v1/relays/", requireAuth(makeBackupProxy("/user/relays/")))
-	// s363 HUB-DECOUPLING Phase 1 (SHADOW, not the live path): when CRDB_DSN is set,
-	// expose a parallel /api/v1/_relays_crdb served straight from CRDB so its bytes can
-	// be diffed against the hub-proxied /api/v1/relays BEFORE flipping the live route.
-	// CRDB_DSN is unset in production today → this block is dormant and safe to ship.
+	mux.HandleFunc("/api/v1/relays/", requireAuth(makeBackupProxy("/user/relays/"))) // s364: backup subpaths (/{id}/backup) stay on hub proxy for now
+	// s364 HUB-DECOUPLING CUTOVER: /api/v1/relays now served directly from CRDB when
+	// configured, removing the hub as a SPOF for the relay list (hub down no longer
+	// breaks Flutter — root cause of s337/s363). Byte-diff in prod confirmed identical
+	// output to the hub proxy incl. relay_token. Falls back to hub proxy if CRDB_DSN
+	// unset (e.g. local dev) so the endpoint never hard-fails on missing config.
 	if dsn := os.Getenv("CRDB_DSN"); dsn != "" {
 		db, err := sql.Open("postgres", dsn)
 		if err != nil {
 			log.Fatalf("FATAL: CRDB_DSN set but sql.Open failed: %v", err)
 		}
-		relayStore := relays.NewSQLStore(db)
-		mux.HandleFunc("/api/v1/_relays_crdb", requireAuth(relays.MyRelaysHandler(relayStore)))
-		log.Printf("s363: shadow CRDB relays route enabled at /api/v1/_relays_crdb")
+		mux.HandleFunc("/api/v1/relays", requireAuth(relays.MyRelaysHandler(relays.NewSQLStore(db))))
+		log.Printf("s364: /api/v1/relays served from CRDB (hub-decoupled)")
+	} else {
+		mux.HandleFunc("/api/v1/relays", requireAuth(makeBackupProxy("/user/relays")))
+		log.Printf("s364: CRDB_DSN unset — /api/v1/relays falls back to hub proxy")
 	}
 	mux.HandleFunc("/api/v1/", handleNotImplemented)
 	log.Printf("dudenest-backend starting on :%s", port)
