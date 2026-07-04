@@ -67,17 +67,31 @@ OAuth callback redirects to `$APP_URL?token=JWT&user=base64(JSON)`.
 
 JWT: HS256, 30-day expiry, payload: `{sub, email, name, avatar, provider, iat, exp}`.
 
+### Relays (hub-decoupled — s364)
+```
+GET /api/v1/relays        → per-user relay list, served DIRECTLY from CockroachDB
+                            (read-only backend_ro user). Response byte-identical to
+                            the hub; relay_token is HMAC(relay_secret, sub:expiry).
+                            Falls back to hub proxy only if CRDB_DSN is unset.
+GET /api/v1/relays/{id}/backup  → proxied to dudenest-hub (backup content)
+GET /health/deep          → end-to-end probe: verifies backend → hub reachability
+```
+Reading the relay list from CRDB (not proxying to the hub) means a hub outage no
+longer breaks the app's relay list or "resets" relay URLs (root cause of s337/s363).
+
 ### Not implemented yet
 ```
-/api/v1/*    → 501 Not Implemented
+other /api/v1/*   → 501 Not Implemented
 ```
 
 ## Environment Variables
 
 | Variable | Required | Example | Description |
 |----------|----------|---------|-------------|
-| `JWT_SECRET` | yes | `changeme-32chars` | HS256 signing key |
+| `JWT_SECRET` | yes | `changeme-32chars` | HS256 signing key (shared with dudenest-hub) |
 | `APP_URL` | yes | `https://dudenest.com` | Where to redirect after auth |
+| `CRDB_DSN` | for relays | `postgresql://backend_ro@10.51.1.212:26257/dudenest_hub?sslmode=disable` | CockroachDB DSN (read-only `backend_ro`) — serves `/api/v1/relays` directly (s364). If unset, `/api/v1/relays` falls back to hub proxy |
+| `HUB_URL` | yes | `http://dudenest-hub_hub:8087` | dudenest-hub base URL (legacy `BACKUP_URL` accepted as fallback) |
 | `GOOGLE_CLIENT_ID` | OAuth | `123.apps.googleusercontent.com` | Google OAuth app |
 | `GOOGLE_CLIENT_SECRET` | OAuth | `GOCSPX-...` | Google OAuth secret |
 | `GITHUB_CLIENT_ID` | OAuth | `Ov23liXxx` | GitHub OAuth app |
