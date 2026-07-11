@@ -33,6 +33,9 @@ The deploy workflow reads these from `secrets.DUDENEST_*` (set in repo Settings 
 | `DUDENEST_GITHUB_CLIENT_ID` | `GITHUB_CLIENT_ID` | optional — GitHub Sign-In |
 | `DUDENEST_GITHUB_CLIENT_SECRET` | `GITHUB_CLIENT_SECRET` | optional |
 | `DUDENEST_APPLE_CLIENT_ID` | `APPLE_CLIENT_ID` | optional |
+| workflow env | `DEMO_ENABLED=true` | enables `/auth/demo` for public demo login |
+| workflow env | `DEMO_USER_ID=google:106774657231866582065` | demo user bound to `relay-demo` |
+| workflow env | `DEMO_USER_EMAIL=dudenest.demo@gmail.com` | demo user email |
 | `RESEND_API_KEY` | `RESEND_API_KEY` | `internal/email/resend.go` — relay mnemonic email |
 | `BACKUP_URL` | `BACKUP_URL` | `cmd/server/main.go` — proxy `/api/v1/relays` to `dudenest-backup` |
 

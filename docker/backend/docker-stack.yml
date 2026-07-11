@@ -22,6 +22,9 @@ services:
       - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}
       - APPLE_CLIENT_ID=${APPLE_CLIENT_ID}
       - RESEND_API_KEY=${RESEND_API_KEY}
+      - DEMO_ENABLED=${DEMO_ENABLED:-false}
+      - DEMO_USER_ID=${DEMO_USER_ID:-}
+      - DEMO_USER_EMAIL=${DEMO_USER_EMAIL:-}
       - HUB_URL=${HUB_URL:-http://dudenest-hub_hub:8087}   # s334: rename BACKUP_URL → HUB_URL, default to new Swarm DNS
       - BACKUP_URL=${HUB_URL:-http://dudenest-hub_hub:8087}   # s334: backward-compat alias for old relay binaries (remove after grace)
       # s364 HUB-DECOUPLING: DORMANT until cutover. Empty default → backend leaves the
