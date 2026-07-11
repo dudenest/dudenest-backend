@@ -32,6 +32,7 @@ func RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/auth/apple", startApple)
 	mux.HandleFunc("/auth/callback/google", callbackGoogle)
 	mux.HandleFunc("/auth/callback/github", callbackGitHub)
+	mux.HandleFunc("/auth/demo", handleDemo) // env-gated, rate-limited shared demo session
 }
 
 // ─── State helpers (base64 encodes return_url + provider) ──────────────────

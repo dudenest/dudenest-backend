@@ -23,14 +23,19 @@ type Claims struct {
 	Name     string `json:"name,omitempty"`
 	Avatar   string `json:"avatar,omitempty"`
 	Provider string `json:"provider"`
+	Demo     bool   `json:"demo,omitempty"` // shared throwaway demo identity (short TTL, restricted UI)
 	Exp      int64  `json:"exp"`
 	Iat      int64  `json:"iat"`
 }
 
-func IssueJWT(c Claims) (string, error) {
+// IssueJWT issues a normal 30-day session token.
+func IssueJWT(c Claims) (string, error) { return IssueJWTWithTTL(c, 30*24*time.Hour) }
+
+// IssueJWTWithTTL issues a token valid for ttl — used by the demo flow with a short TTL.
+func IssueJWTWithTTL(c Claims, ttl time.Duration) (string, error) {
 	now := time.Now()
 	c.Iat = now.Unix()
-	c.Exp = now.Add(30 * 24 * time.Hour).Unix() // 30 days
+	c.Exp = now.Add(ttl).Unix()
 	header := b64(`{"alg":"HS256","typ":"JWT"}`)
 	payload, err := json.Marshal(c)
 	if err != nil { return "", err }
