@@ -267,7 +267,9 @@ func makeHubExactProxy(hubPath string) http.HandlerFunc {
 			json.NewEncoder(w).Encode(map[string]string{"error": "hub service not configured"}) //nolint:errcheck
 			return
 		}
-		req, err := http.NewRequestWithContext(r.Context(), r.Method, hub+hubPath, r.Body)
+		target := hub + hubPath
+		if r.URL.RawQuery != "" { target += "?" + r.URL.RawQuery }
+		req, err := http.NewRequestWithContext(r.Context(), r.Method, target, r.Body)
 		if err != nil { w.WriteHeader(500); return }
 		req.Header.Set("Authorization", r.Header.Get("Authorization"))
 		req.Header.Set("Content-Type", r.Header.Get("Content-Type"))

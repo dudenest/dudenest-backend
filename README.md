@@ -73,8 +73,9 @@ GET /api/v1/relays        → per-user relay list, served DIRECTLY from Cockroac
                             (read-only backend_ro user). Response byte-identical to
                             the hub; relay_token is HMAC(relay_secret, sub:expiry).
                             Falls back to hub proxy only if CRDB_DSN is unset.
-GET /api/v1/relay/discover → claim/pair a newly provisioned relay on the same public IP
-                             (proxied to hub /user/relay/discover).
+GET /api/v1/relay/discover → claim/pair a newly provisioned relay; pass ?relay_id=<id>
+                             for LAN discovery, or omit it for legacy public-IP matching.
+                             Proxied to hub /user/relay/discover with query preserved.
 GET /api/v1/relays/{id}/backup  → proxied to dudenest-hub (backup content)
 GET /health/deep          → end-to-end probe: verifies backend → hub reachability
 ```
