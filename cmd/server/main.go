@@ -52,6 +52,7 @@ func main() {
 	auth.RegisterRoutes(mux)
 	mux.HandleFunc("/api/v1/relay/setup-email", requireAuth(makeRelaySetupEmail(emailClient)))
 	mux.HandleFunc("/api/v1/relay/install-config", requireAuth(handleRelayInstallConfig))
+	mux.HandleFunc("/api/v1/relay/discover", requireAuth(makeHubExactProxy("/user/relay/discover"))) // LAN claim: backend path maps to hub singular /user/relay/discover
 	mux.HandleFunc("/api/v1/relays/", requireAuth(makeBackupProxy("/user/relays/"))) // s364: backup subpaths (/{id}/backup) stay on hub proxy for now
 	// s364 HUB-DECOUPLING CUTOVER: /api/v1/relays now served directly from CRDB when
 	// configured, removing the hub as a SPOF for the relay list (hub down no longer
@@ -247,6 +248,32 @@ func makeBackupProxy(hubPath string) http.HandlerFunc { // s334: function name k
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			log.Printf("hub proxy error: %v", err)
+			w.WriteHeader(http.StatusBadGateway)
+			json.NewEncoder(w).Encode(map[string]string{"error": "hub unavailable"}) //nolint:errcheck
+			return
+		}
+		defer resp.Body.Close()
+		w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+		w.WriteHeader(resp.StatusCode)
+		io.Copy(w, resp.Body) //nolint:errcheck
+	}
+}
+
+func makeHubExactProxy(hubPath string) http.HandlerFunc {
+	hub := hubURL()
+	return func(w http.ResponseWriter, r *http.Request) {
+		if hub == "" {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			json.NewEncoder(w).Encode(map[string]string{"error": "hub service not configured"}) //nolint:errcheck
+			return
+		}
+		req, err := http.NewRequestWithContext(r.Context(), r.Method, hub+hubPath, r.Body)
+		if err != nil { w.WriteHeader(500); return }
+		req.Header.Set("Authorization", r.Header.Get("Authorization"))
+		req.Header.Set("Content-Type", r.Header.Get("Content-Type"))
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			log.Printf("hub exact proxy error: %v", err)
 			w.WriteHeader(http.StatusBadGateway)
 			json.NewEncoder(w).Encode(map[string]string{"error": "hub unavailable"}) //nolint:errcheck
 			return
