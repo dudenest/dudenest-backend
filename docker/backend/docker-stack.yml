@@ -47,9 +47,14 @@ services:
         parallelism: 1
         delay: 5s
       restart_policy:
-        condition: on-failure
+        # condition: any (nie on-failure) + BEZ max_attempts = self-heal w nieskończoność.
+        # Powód (incydent 2026-07-15/16): backend padał sporadycznie (exit 2), Swarm restartował
+        # go 3× (max_attempts:3), wyczerpał limit i PRZESTAWAŁ próbować → 0/2 → api.dudenest.com 404
+        # → zepsute logowanie na wiele godzin. Ten sam wzorzec co s363 dla huba (carry-over w STATE.md).
+        # Healthcheck (niżej) + Traefik LB healthcheck (s330) zapewniają, że ruch nie trafia do
+        # niezdrowej repliki; restart_policy: any zapewnia, że replika zawsze wróci po blipie.
+        condition: any
         delay: 5s
-        max_attempts: 3
       resources:
         limits:
           cpus: "1.0"
