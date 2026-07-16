@@ -78,12 +78,17 @@ services:
       retries: 3
       start_period: 10s
     logging:
-      driver: gelf
+      # json-file (nie gelf) — OBSERWOWALNOŚĆ. Powód (2026-07-16): backend padał z exit 2, a
+      # stack logował przez gelf → Graylog 10.51.1.252, który był DOWN (100% packet loss) → cały
+      # stderr (w tym stack trace runtime fatal error / SIGQUIT) był połykany, więc `docker logs`
+      # nic nie pokazywał i przyczyna exit 2 była niediagnozowalna. json-file trzyma logi lokalnie,
+      # czytelne przez `docker logs` → następny crash pokaże stos. max-size/max-file: nody są ~87%
+      # zajęte, więc rotacja OBOWIĄZKOWA żeby log nie zapełnił dysku.
+      # Gdy Graylog wróci: rozważyć powrót do gelf LUB dual (json-file lokalnie + Graylog centralnie).
+      driver: json-file
       options:
-        gelf-address: "udp://10.51.1.252:12201"
-        tag: "dudenest-backend"
-        gelf-compression-type: gzip
-        labels: "com.docker.stack.namespace,com.docker.swarm.service.name"
+        max-size: "10m"
+        max-file: "3"
 
   redis:
     image: redis:7-alpine
