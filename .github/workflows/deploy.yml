@@ -110,9 +110,12 @@ jobs:
           MIRROR_NAME: dudenest/dudenest-backend
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          docker pull ${{ env.IMAGE_NAME }}:sha-$(echo $IMAGE_TAG | cut -c1-7) 2>/dev/null \
-            || docker pull ${{ env.IMAGE_NAME }}:${IMAGE_TAG}
-          SOURCE=$(docker images --format '{{.Repository}}:{{.Tag}}' | grep dudenest-backend | head -1)
+          SHORT=$(echo $IMAGE_TAG | cut -c1-7)
+          # SOURCE = DOKŁADNA referencja ghcr (nie `docker images | grep | head -1` — na self-hosted
+          # runnerze łapało nieaktualny obraz registry.netol.io z leftover → `docker tag` padał
+          # "Error parsing reference" i blokował cały deploy backendu).
+          SOURCE="${{ env.IMAGE_NAME }}:sha-${SHORT}"
+          docker pull "$SOURCE" 2>/dev/null || { SOURCE="${{ env.IMAGE_NAME }}:${IMAGE_TAG}"; docker pull "$SOURCE"; }
           echo "Source image: $SOURCE"
           echo "$REGISTRY_NETOL_TOKEN" | docker login registry.netol.io -u "$REGISTRY_NETOL_USER" --password-stdin
           docker tag "$SOURCE" registry.netol.io/${MIRROR_NAME}:sha-$(echo $IMAGE_TAG | cut -c1-7)

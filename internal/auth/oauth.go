@@ -78,6 +78,9 @@ func startGoogle(w http.ResponseWriter, r *http.Request) {
 		"response_type": {"code"},
 		"scope":         {"openid email profile"},
 		"state":         {state},
+		// select_account: ZAWSZE pokaż picker kont Google. Bez tego na przeglądarce zalogowanej do
+		// wielu kont Google login Dudenest cicho brał domyślne konto → mylące (kto jest zalogowany).
+		"prompt": {"select_account"},
 	}
 	http.Redirect(w, r, "https://accounts.google.com/o/oauth2/v2/auth?"+params.Encode(), http.StatusFound)
 }
