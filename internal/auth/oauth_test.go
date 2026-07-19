@@ -3,6 +3,7 @@ package auth
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -92,4 +93,7 @@ func TestStartGoogle_WithClientID(t *testing.T) {
 	}
 	loc := rr.Header().Get("Location")
 	if loc == "" { t.Error("expected Location header") }
+	if !strings.Contains(loc, "prompt=select_account") {
+		t.Errorf("expected prompt=select_account (wymuszony wybór konta Google), got: %s", loc)
+	}
 }
