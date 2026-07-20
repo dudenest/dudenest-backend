@@ -145,6 +145,8 @@ jobs:
           DEMO_USER_ID: google:106774657231866582065
           DEMO_USER_EMAIL: dudenest.demo@gmail.com
           CRDB_DSN: ${{ secrets.DUDENEST_CRDB_DSN }}   # s364 HUB-DECOUPLING: empty until secret exists → stack `${CRDB_DSN:-}` stays empty → shadow route dormant. Set secret to `postgresql://backend_ro@10.51.1.212:26257/dudenest_hub?sslmode=disable` to enable /api/v1/_relays_crdb (backend_ro created 2026-07-01, SELECT-only on relays).
+          DRIVE_TOKEN_ENC_KEY: ${{ secrets.DUDENEST_DRIVE_TOKEN_ENC_KEY }}  # direct-mode Drive OAuth: AES-256-GCM key for refresh-token-at-rest
+          DRIVE_CRDB_DSN: ${{ secrets.DUDENEST_DRIVE_CRDB_DSN }}           # writable scoped user backend_drive on google_drive_tokens (2026-07-20)
           # s337: HUB_URL intentionally NOT injected from secrets — stack file default `${HUB_URL:-http://dudenest-hub_hub:8087}` provides correct internal Swarm DNS. Injection from secrets caused s337 incident (stale value `http://dudenest-backup_backup:8087` from pre-s334 era persisted in secrets, overrode stack default, broke backend→hub proxy for 2+ days post-s334 cutover. Users prcznsk+darek got broken relay data.)
         run: |
           export IMAGE="${DEPLOY_REGISTRY}/dudenest/dudenest-backend:sha-${IMAGE_TAG:0:7}"  # s330: from mirror, not ghcr

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"io"
@@ -13,6 +14,7 @@ import (
 	_ "github.com/lib/pq" // CRDB/postgres driver for the HUB-DECOUPLING relays store
 
 	"github.com/dudenest/dudenest-backend/internal/auth"
+	"github.com/dudenest/dudenest-backend/internal/directauth"
 	"github.com/dudenest/dudenest-backend/internal/email"
 	"github.com/dudenest/dudenest-backend/internal/relays"
 )
@@ -70,9 +72,57 @@ func main() {
 		mux.HandleFunc("/api/v1/relays", requireAuth(makeBackupProxy("/user/relays")))
 		log.Printf("s364: CRDB_DSN unset — /api/v1/relays falls back to hub proxy")
 	}
+	// Direct-mode Google Drive OAuth (backend-assisted refresh token → consent via redirect, not popup;
+	// /photos loads immediately every login). GATED on config → dormant until DRIVE_TOKEN_ENC_KEY +
+	// DRIVE_CRDB_DSN (writable, own scoped user) are set. Existing /auth/google login is untouched.
+	if encKey, driveDSN := os.Getenv("DRIVE_TOKEN_ENC_KEY"), os.Getenv("DRIVE_CRDB_DSN"); encKey != "" && driveDSN != "" {
+		// Fully fail-safe: ANY setup error → log + skip the feature, NEVER crash (would take down login).
+		if err := setupDirectAuth(mux, encKey, driveDSN); err != nil {
+			log.Printf("warn: directauth disabled — setup failed: %v", err)
+		} else {
+			log.Printf("directauth: direct-mode Google Drive OAuth ENABLED")
+		}
+	} else {
+		log.Printf("directauth: disabled (DRIVE_TOKEN_ENC_KEY/DRIVE_CRDB_DSN unset)")
+	}
 	mux.HandleFunc("/api/v1/", handleNotImplemented)
 	log.Printf("dudenest-backend starting on :%s", port)
 	if err := http.ListenAndServe(":"+port, corsMiddleware(mux)); err != nil { log.Fatal(err) }
+}
+
+// setupDirectAuth wires the direct-mode Google Drive OAuth endpoints. Returns error instead of
+// crashing so a misconfig disables the feature without taking down login (s313 discipline).
+func setupDirectAuth(mux *http.ServeMux, encKey, driveDSN string) error {
+	ddb, err := sql.Open("postgres", driveDSN)
+	if err != nil {
+		return err
+	}
+	store := directauth.NewSQLStore(ddb)
+	// Table is pre-created during rollout; a missing CREATE grant must not fail here (DML still works).
+	if err := store.Migrate(context.Background()); err != nil {
+		log.Printf("warn: directauth migrate failed (table assumed pre-created): %v", err)
+	}
+	appURL := os.Getenv("APP_URL")
+	if appURL == "" { appURL = "https://dudenest.com" }
+	h, err := directauth.NewHandler(store, encKey,
+		os.Getenv("GOOGLE_CLIENT_ID"), os.Getenv("GOOGLE_CLIENT_SECRET"),
+		"https://api.dudenest.com/auth/callback/google/drive", appURL, os.Getenv("JWT_SECRET"))
+	if err != nil {
+		return err
+	}
+	mux.HandleFunc("/auth/google/drive", h.StartDrive)              // redirect → Google consent (offline)
+	mux.HandleFunc("/auth/callback/google/drive", h.CallbackDrive) // exchange + store refresh
+	mux.HandleFunc("/api/v1/direct/google/token", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			h.Token(w, r) // mint fresh drive.file access token (no popup)
+		case http.MethodDelete:
+			h.Disconnect(w, r)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+	return nil
 }
 
 // corsMiddleware allows dudenest.com and app.dudenest.com origins

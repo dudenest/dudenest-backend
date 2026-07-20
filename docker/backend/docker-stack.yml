@@ -32,6 +32,10 @@ services:
       # add GitHub secret DUDENEST_CRDB_DSN (backend_ro user, GRANT SELECT ON relays)
       # and export CRDB_DSN in deploy.yml so envsubst fills it. Do NOT set until backend_ro exists.
       - CRDB_DSN=${CRDB_DSN:-}
+      # direct-mode Google Drive OAuth (refresh token). Both empty → feature DORMANT (login untouched).
+      # DRIVE_CRDB_DSN = writable scoped user backend_drive on google_drive_tokens (created 2026-07-20).
+      - DRIVE_TOKEN_ENC_KEY=${DRIVE_TOKEN_ENC_KEY:-}
+      - DRIVE_CRDB_DSN=${DRIVE_CRDB_DSN:-}
     networks: [dudenest, proxy-netol-prod]
     deploy:
       replicas: 2
