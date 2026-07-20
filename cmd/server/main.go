@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"io"
@@ -13,6 +14,7 @@ import (
 	_ "github.com/lib/pq" // CRDB/postgres driver for the HUB-DECOUPLING relays store
 
 	"github.com/dudenest/dudenest-backend/internal/auth"
+	"github.com/dudenest/dudenest-backend/internal/directauth"
 	"github.com/dudenest/dudenest-backend/internal/email"
 	"github.com/dudenest/dudenest-backend/internal/relays"
 )
@@ -69,6 +71,42 @@ func main() {
 	} else {
 		mux.HandleFunc("/api/v1/relays", requireAuth(makeBackupProxy("/user/relays")))
 		log.Printf("s364: CRDB_DSN unset — /api/v1/relays falls back to hub proxy")
+	}
+	// Direct-mode Google Drive OAuth (backend-assisted refresh token → consent via redirect, not popup;
+	// /photos loads immediately every login). GATED on config → dormant until DRIVE_TOKEN_ENC_KEY +
+	// DRIVE_CRDB_DSN (writable, own scoped user) are set. Existing /auth/google login is untouched.
+	if encKey, driveDSN := os.Getenv("DRIVE_TOKEN_ENC_KEY"), os.Getenv("DRIVE_CRDB_DSN"); encKey != "" && driveDSN != "" {
+		ddb, err := sql.Open("postgres", driveDSN)
+		if err != nil {
+			log.Fatalf("FATAL: DRIVE_CRDB_DSN set but sql.Open failed: %v", err)
+		}
+		store := directauth.NewSQLStore(ddb)
+		if err := store.Migrate(context.Background()); err != nil {
+			log.Fatalf("FATAL: directauth migrate failed: %v", err)
+		}
+		appURL := os.Getenv("APP_URL")
+		if appURL == "" { appURL = "https://dudenest.com" }
+		h, err := directauth.NewHandler(store, encKey,
+			os.Getenv("GOOGLE_CLIENT_ID"), os.Getenv("GOOGLE_CLIENT_SECRET"),
+			"https://api.dudenest.com/auth/callback/google/drive", appURL, os.Getenv("JWT_SECRET"))
+		if err != nil {
+			log.Fatalf("FATAL: directauth handler: %v", err)
+		}
+		mux.HandleFunc("/auth/google/drive", h.StartDrive)              // redirect → Google consent (offline)
+		mux.HandleFunc("/auth/callback/google/drive", h.CallbackDrive) // exchange + store refresh
+		mux.HandleFunc("/api/v1/direct/google/token", func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method {
+			case http.MethodGet:
+				h.Token(w, r) // mint fresh drive.file access token (no popup)
+			case http.MethodDelete:
+				h.Disconnect(w, r)
+			default:
+				w.WriteHeader(http.StatusMethodNotAllowed)
+			}
+		})
+		log.Printf("directauth: direct-mode Google Drive OAuth ENABLED")
+	} else {
+		log.Printf("directauth: disabled (DRIVE_TOKEN_ENC_KEY/DRIVE_CRDB_DSN unset)")
 	}
 	mux.HandleFunc("/api/v1/", handleNotImplemented)
 	log.Printf("dudenest-backend starting on :%s", port)
