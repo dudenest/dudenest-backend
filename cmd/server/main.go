@@ -104,24 +104,23 @@ func setupDirectAuth(mux *http.ServeMux, encKey, driveDSN string) error {
 	}
 	appURL := os.Getenv("APP_URL")
 	if appURL == "" { appURL = "https://dudenest.com" }
+	// RedirectBase + "/{provider}/drive" = zarejestrowany w Google Console redirect URI (.../callback/google/drive).
 	h, err := directauth.NewHandler(store, encKey,
 		os.Getenv("GOOGLE_CLIENT_ID"), os.Getenv("GOOGLE_CLIENT_SECRET"),
-		"https://api.dudenest.com/auth/callback/google/drive", appURL, os.Getenv("JWT_SECRET"))
+		"https://api.dudenest.com/auth/callback", appURL, os.Getenv("JWT_SECRET"))
 	if err != nil {
 		return err
 	}
-	mux.HandleFunc("/auth/google/drive", h.StartDrive)              // redirect → Google consent (offline)
-	mux.HandleFunc("/auth/callback/google/drive", h.CallbackDrive) // exchange + store refresh
-	mux.HandleFunc("/api/v1/direct/google/token", func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			h.Token(w, r) // mint fresh drive.file access token (no popup)
-		case http.MethodDelete:
-			h.Disconnect(w, r)
-		default:
-			w.WriteHeader(http.StatusMethodNotAllowed)
-		}
-	})
+	// Legacy (żywy Flutter sprzed multi-konto) — zachowane, wskazują na te same konto google.
+	mux.HandleFunc("/auth/google/drive", h.Start("google"))              // redirect → Google consent
+	mux.HandleFunc("/auth/callback/google/drive", h.Callback("google"))  // exchange + zapis konta
+	mux.HandleFunc("GET /api/v1/direct/google/token", h.GoogleTokenLegacy)
+	// Multi-konto / multi-provider (nowy Flutter MP1b).
+	mux.HandleFunc("/auth/{provider}/connect", h.StartConnect)
+	mux.HandleFunc("/auth/callback/{provider}/drive", h.CallbackConnect)
+	mux.HandleFunc("GET /api/v1/direct/accounts", h.ListAccounts)
+	mux.HandleFunc("GET /api/v1/direct/accounts/{id}/token", h.AccountToken)
+	mux.HandleFunc("DELETE /api/v1/direct/accounts/{id}", h.DeleteAccount)
 	return nil
 }
 

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"testing"
 
@@ -14,106 +13,58 @@ import (
 
 const testKey = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=" // base64 of 32 bytes
 
-// ─── fake store ──────────────────────────────────────────────────────────────
+// ─── fake store (multi-konto) ────────────────────────────────────────────────
 type fakeStore struct {
-	enc     []byte
-	email   string
-	present bool
-	deleted bool
+	accounts map[string]Account
+	deleted  []string
 }
 
-func (f *fakeStore) Upsert(_ context.Context, _ string, enc []byte, email string) error {
-	f.enc, f.email, f.present = enc, email, true
+func newFakeStore() *fakeStore { return &fakeStore{accounts: map[string]Account{}} }
+
+func (f *fakeStore) Upsert(_ context.Context, a Account) error { f.accounts[a.AccountID] = a; return nil }
+func (f *fakeStore) Get(_ context.Context, id string) (Account, error) {
+	a, ok := f.accounts[id]
+	if !ok {
+		return Account{}, ErrNotFound
+	}
+	return a, nil
+}
+func (f *fakeStore) ListByUser(_ context.Context, userID string) ([]Account, error) {
+	var out []Account
+	for _, a := range f.accounts {
+		if a.UserID == userID {
+			out = append(out, Account{AccountID: a.AccountID, UserID: a.UserID, Provider: a.Provider, Email: a.Email})
+		}
+	}
+	return out, nil
+}
+func (f *fakeStore) Delete(_ context.Context, id string) error {
+	delete(f.accounts, id)
+	f.deleted = append(f.deleted, id)
 	return nil
 }
-func (f *fakeStore) Get(_ context.Context, _ string) ([]byte, string, error) {
-	if !f.present {
-		return nil, "", ErrNotFound
-	}
-	return f.enc, f.email, nil
-}
-func (f *fakeStore) Delete(_ context.Context, _ string) error { f.deleted = true; f.present = false; return nil }
 
 func newTestHandler(t *testing.T, store Store) *Handler {
 	t.Helper()
 	h, err := NewHandler(store, testKey, "cid", "secret",
-		"https://api.dudenest.com/auth/callback/google/drive", "https://dudenest.com", "dev-secret-change-in-prod")
+		"https://api.dudenest.com/auth/callback", "https://dudenest.com", "dev-secret-change-in-prod")
 	if err != nil {
 		t.Fatalf("NewHandler: %v", err)
 	}
 	return h
 }
 
-func googleJWT(t *testing.T) string {
+func googleJWT(t *testing.T, sub string) string {
 	t.Helper()
-	tok, err := auth.IssueJWT(auth.Claims{Sub: "google:1", Email: "me@gmail.com", Provider: "google"})
+	tok, err := auth.IssueJWT(auth.Claims{Sub: sub, Email: "me@gmail.com", Provider: "google"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return tok
 }
 
-// ─── crypto ──────────────────────────────────────────────────────────────────
-func TestCryptoRoundTrip(t *testing.T) {
-	a, err := NewCipher(testKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ct, _ := Encrypt(a, []byte("refresh-token-xyz"))
-	pt, err := Decrypt(a, ct)
-	if err != nil || string(pt) != "refresh-token-xyz" {
-		t.Fatalf("round-trip: pt=%q err=%v", pt, err)
-	}
-}
-
-func TestNewCipherBadKey(t *testing.T) {
-	if _, err := NewCipher("dG9vLXNob3J0"); err == nil { // "too-short" base64 → not 32 bytes
-		t.Fatal("expected error for non-32-byte key")
-	}
-}
-
-func TestStateSignVerify(t *testing.T) {
-	h := newTestHandler(t, &fakeStore{})
-	s := h.signState("google:1", "me@gmail.com", "https://dudenest.com")
-	d, ok := h.verifyState(s)
-	if !ok || d.Sub != "google:1" || d.Email != "me@gmail.com" {
-		t.Fatalf("verify: ok=%v d=%+v", ok, d)
-	}
-	if _, ok := h.verifyState(s + "x"); ok {
-		t.Fatal("tampered state must fail")
-	}
-}
-
-// ─── StartDrive ──────────────────────────────────────────────────────────────
-func TestStartDriveRedirect(t *testing.T) {
-	h := newTestHandler(t, &fakeStore{})
-	r := httptest.NewRequest("GET", "/auth/google/drive?token="+googleJWT(t)+"&return_url=https://dudenest.com/x", nil)
-	w := httptest.NewRecorder()
-	h.StartDrive(w, r)
-	if w.Code != http.StatusFound {
-		t.Fatalf("code=%d", w.Code)
-	}
-	loc := w.Header().Get("Location")
-	for _, want := range []string{"access_type=offline", "prompt=consent", "drive.file", "state="} {
-		if !strings.Contains(loc, want) {
-			t.Errorf("redirect missing %q: %s", want, loc)
-		}
-	}
-}
-
-func TestStartDriveNonGoogle(t *testing.T) {
-	h := newTestHandler(t, &fakeStore{})
-	tok, _ := auth.IssueJWT(auth.Claims{Sub: "github:1", Email: "x@y.z", Provider: "github"})
-	r := httptest.NewRequest("GET", "/auth/google/drive?token="+tok, nil)
-	w := httptest.NewRecorder()
-	h.StartDrive(w, r)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("non-google should be 400, got %d", w.Code)
-	}
-}
-
-// ─── Callback ────────────────────────────────────────────────────────────────
-func mockGoogle(t *testing.T, refresh, userEmail string, invalidGrant bool) *httptest.Server {
+// mockGoogle MUSI być wołane PRZED newTestHandler (NewHandler czyta URL-e do providerConfig).
+func mockGoogle(t *testing.T, refresh, userEmail string, invalidGrant bool) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
@@ -135,100 +86,202 @@ func mockGoogle(t *testing.T, refresh, userEmail string, invalidGrant bool) *htt
 	googleTokenURL = srv.URL + "/token"
 	googleUserinfoURL = srv.URL + "/userinfo"
 	t.Cleanup(srv.Close)
-	return srv
 }
 
-func TestCallbackHappyPath(t *testing.T) {
-	mockGoogle(t, "refresh-xyz", "me@gmail.com", false)
-	store := &fakeStore{}
-	h := newTestHandler(t, store)
-	state := h.signState("google:1", "me@gmail.com", "https://dudenest.com")
-	r := httptest.NewRequest("GET", "/auth/callback/google/drive?code=CODE&state="+url.QueryEscape(state), nil)
+// ─── crypto / state ──────────────────────────────────────────────────────────
+func TestCryptoRoundTrip(t *testing.T) {
+	a, err := NewCipher(testKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ct, _ := Encrypt(a, []byte("refresh-token-xyz"))
+	pt, err := Decrypt(a, ct)
+	if err != nil || string(pt) != "refresh-token-xyz" {
+		t.Fatalf("round-trip: pt=%q err=%v", pt, err)
+	}
+}
+
+func TestNewCipherBadKey(t *testing.T) {
+	if _, err := NewCipher("dG9vLXNob3J0"); err == nil {
+		t.Fatal("expected error for non-32-byte key")
+	}
+}
+
+func TestStateSignVerify(t *testing.T) {
+	h := newTestHandler(t, newFakeStore())
+	s := h.signState("google:1", "google", "https://dudenest.com")
+	d, ok := h.verifyState(s)
+	if !ok || d.Sub != "google:1" || d.Provider != "google" {
+		t.Fatalf("verify: ok=%v d=%+v", ok, d)
+	}
+	if _, ok := h.verifyState(s + "x"); ok {
+		t.Fatal("tampered state must fail")
+	}
+}
+
+// ─── StartConnect ────────────────────────────────────────────────────────────
+func TestStartConnectRedirect(t *testing.T) {
+	h := newTestHandler(t, newFakeStore())
+	r := httptest.NewRequest("GET", "/auth/google/connect?token="+googleJWT(t, "google:1")+"&return_url=https://dudenest.com/x", nil)
 	w := httptest.NewRecorder()
-	h.CallbackDrive(w, r)
+	h.Start("google")(w, r)
+	if w.Code != http.StatusFound {
+		t.Fatalf("code=%d", w.Code)
+	}
+	loc := w.Header().Get("Location")
+	for _, want := range []string{"access_type=offline", "prompt=consent", "drive.file", "callback%2Fgoogle%2Fdrive", "state="} {
+		if !strings.Contains(loc, want) {
+			t.Errorf("redirect missing %q: %s", want, loc)
+		}
+	}
+}
+
+func TestStartConnectUnknownProvider(t *testing.T) {
+	h := newTestHandler(t, newFakeStore())
+	r := httptest.NewRequest("GET", "/auth/mega/connect?token="+googleJWT(t, "google:1"), nil)
+	w := httptest.NewRecorder()
+	h.Start("mega")(w, r)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("unknown provider should be 404, got %d", w.Code)
+	}
+}
+
+// ─── Callback ────────────────────────────────────────────────────────────────
+func TestCallbackStoresAccount(t *testing.T) {
+	mockGoogle(t, "refresh-xyz", "me@gmail.com", false)
+	store := newFakeStore()
+	h := newTestHandler(t, store)
+	state := h.signState("google:1", "google", "https://dudenest.com")
+	r := httptest.NewRequest("GET", "/auth/callback/google/drive?code=CODE&state="+state, nil)
+	w := httptest.NewRecorder()
+	h.Callback("google")(w, r)
 	if w.Code != http.StatusFound {
 		t.Fatalf("code=%d body=%s", w.Code, w.Body.String())
 	}
-	if !store.present {
-		t.Fatal("refresh token not stored")
+	acc, ok := store.accounts["google:me@gmail.com"]
+	if !ok {
+		t.Fatal("account not stored under provider:email key")
 	}
-	if !strings.Contains(w.Header().Get("Location"), "drive=connected") {
-		t.Errorf("missing drive=connected: %s", w.Header().Get("Location"))
+	if acc.UserID != "google:1" || acc.Provider != "google" {
+		t.Errorf("bad account: %+v", acc)
 	}
-	// stored blob must be encrypted (not plaintext)
-	if strings.Contains(string(store.enc), "refresh-xyz") {
+	if strings.Contains(string(acc.RefreshEnc), "refresh-xyz") {
 		t.Fatal("refresh token stored in plaintext!")
 	}
 }
 
-func TestCallbackAccountMismatch(t *testing.T) {
-	mockGoogle(t, "refresh-xyz", "someone-else@gmail.com", false) // userinfo != state email
-	store := &fakeStore{}
+// ─── ListAccounts ────────────────────────────────────────────────────────────
+func TestListAccounts(t *testing.T) {
+	store := newFakeStore()
+	store.accounts["google:a@x.com"] = Account{AccountID: "google:a@x.com", UserID: "u1", Provider: "google", Email: "a@x.com"}
+	store.accounts["google:b@x.com"] = Account{AccountID: "google:b@x.com", UserID: "u1", Provider: "google", Email: "b@x.com"}
+	store.accounts["google:c@x.com"] = Account{AccountID: "google:c@x.com", UserID: "u2", Provider: "google", Email: "c@x.com"}
 	h := newTestHandler(t, store)
-	state := h.signState("google:1", "me@gmail.com", "https://dudenest.com")
-	r := httptest.NewRequest("GET", "/auth/callback/google/drive?code=CODE&state="+url.QueryEscape(state), nil)
+	r := httptest.NewRequest("GET", "/api/v1/direct/accounts", nil)
+	r.Header.Set("Authorization", "Bearer "+googleJWT(t, "u1"))
 	w := httptest.NewRecorder()
-	h.CallbackDrive(w, r)
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("mismatch should be 403, got %d", w.Code)
+	h.ListAccounts(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code=%d", w.Code)
 	}
-	if store.present {
-		t.Fatal("must NOT store on account mismatch")
+	var body struct {
+		Accounts []map[string]string `json:"accounts"`
+	}
+	json.Unmarshal(w.Body.Bytes(), &body)
+	if len(body.Accounts) != 2 { // tylko konta u1
+		t.Fatalf("expected 2 accounts for u1, got %d", len(body.Accounts))
 	}
 }
 
-// ─── Token ───────────────────────────────────────────────────────────────────
-func TestTokenNotConnected(t *testing.T) {
-	h := newTestHandler(t, &fakeStore{}) // empty
-	r := httptest.NewRequest("GET", "/api/v1/direct/google/token", nil)
-	r.Header.Set("Authorization", "Bearer "+googleJWT(t))
-	w := httptest.NewRecorder()
-	h.Token(w, r)
-	if w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), "not_connected") {
-		t.Fatalf("expected 404 not_connected, got %d %s", w.Code, w.Body.String())
-	}
-}
-
-func TestTokenHappyPath(t *testing.T) {
+// ─── AccountToken ────────────────────────────────────────────────────────────
+func TestAccountTokenHappy(t *testing.T) {
 	mockGoogle(t, "", "me@gmail.com", false)
-	h := newTestHandler(t, &fakeStore{})
+	h := newTestHandler(t, newFakeStore())
 	sealed, _ := h.encrypt([]byte("refresh-xyz"))
-	store := &fakeStore{enc: sealed, email: "me@gmail.com", present: true}
+	store := newFakeStore()
+	store.accounts["google:me@gmail.com"] = Account{AccountID: "google:me@gmail.com", UserID: "u1", Provider: "google", Email: "me@gmail.com", RefreshEnc: sealed}
 	h.Store = store
-	r := httptest.NewRequest("GET", "/api/v1/direct/google/token", nil)
-	r.Header.Set("Authorization", "Bearer "+googleJWT(t))
+	r := httptest.NewRequest("GET", "/api/v1/direct/accounts/google:me@gmail.com/token", nil)
+	r.SetPathValue("id", "google:me@gmail.com")
+	r.Header.Set("Authorization", "Bearer "+googleJWT(t, "u1"))
 	w := httptest.NewRecorder()
-	h.Token(w, r)
+	h.AccountToken(w, r)
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "access-123") {
-		t.Fatalf("expected 200 with access token, got %d %s", w.Code, w.Body.String())
+		t.Fatalf("expected 200 access-123, got %d %s", w.Code, w.Body.String())
 	}
 }
 
-func TestTokenInvalidGrantDeletes(t *testing.T) {
-	mockGoogle(t, "", "me@gmail.com", true) // refresh → invalid_grant
-	h := newTestHandler(t, &fakeStore{})
-	sealed, _ := h.encrypt([]byte("revoked-refresh"))
-	store := &fakeStore{enc: sealed, email: "me@gmail.com", present: true}
+func TestAccountTokenWrongUser(t *testing.T) {
+	h := newTestHandler(t, newFakeStore())
+	sealed, _ := h.encrypt([]byte("r"))
+	store := newFakeStore()
+	store.accounts["google:me@gmail.com"] = Account{AccountID: "google:me@gmail.com", UserID: "u1", Provider: "google", Email: "me@gmail.com", RefreshEnc: sealed}
+	h.Store = store
+	r := httptest.NewRequest("GET", "/api/v1/direct/accounts/google:me@gmail.com/token", nil)
+	r.SetPathValue("id", "google:me@gmail.com")
+	r.Header.Set("Authorization", "Bearer "+googleJWT(t, "u2")) // NIE właściciel
+	w := httptest.NewRecorder()
+	h.AccountToken(w, r)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("cudze konto → 404, got %d", w.Code)
+	}
+}
+
+func TestAccountTokenInvalidGrantDeletes(t *testing.T) {
+	mockGoogle(t, "", "me@gmail.com", true)
+	h := newTestHandler(t, newFakeStore())
+	sealed, _ := h.encrypt([]byte("revoked"))
+	store := newFakeStore()
+	store.accounts["google:me@gmail.com"] = Account{AccountID: "google:me@gmail.com", UserID: "u1", Provider: "google", Email: "me@gmail.com", RefreshEnc: sealed}
+	h.Store = store
+	r := httptest.NewRequest("GET", "/api/v1/direct/accounts/google:me@gmail.com/token", nil)
+	r.SetPathValue("id", "google:me@gmail.com")
+	r.Header.Set("Authorization", "Bearer "+googleJWT(t, "u1"))
+	w := httptest.NewRecorder()
+	h.AccountToken(w, r)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("invalid_grant → 404, got %d", w.Code)
+	}
+	if len(store.deleted) != 1 {
+		t.Fatal("revoked account must be deleted")
+	}
+}
+
+// ─── GoogleTokenLegacy (backward compat) ─────────────────────────────────────
+func TestGoogleTokenLegacy(t *testing.T) {
+	mockGoogle(t, "", "me@gmail.com", false)
+	h := newTestHandler(t, newFakeStore())
+	sealed, _ := h.encrypt([]byte("refresh-xyz"))
+	store := newFakeStore()
+	store.accounts["google:me@gmail.com"] = Account{AccountID: "google:me@gmail.com", UserID: "u1", Provider: "google", Email: "me@gmail.com", RefreshEnc: sealed}
 	h.Store = store
 	r := httptest.NewRequest("GET", "/api/v1/direct/google/token", nil)
-	r.Header.Set("Authorization", "Bearer "+googleJWT(t))
+	r.Header.Set("Authorization", "Bearer "+googleJWT(t, "u1"))
 	w := httptest.NewRecorder()
-	h.Token(w, r)
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("invalid_grant should → 404, got %d", w.Code)
-	}
-	if !store.deleted {
-		t.Fatal("revoked token must be deleted (force reconnect)")
+	h.GoogleTokenLegacy(w, r)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "access-123") {
+		t.Fatalf("legacy token: %d %s", w.Code, w.Body.String())
 	}
 }
 
-func TestTokenNoAuth(t *testing.T) {
-	h := newTestHandler(t, &fakeStore{})
+func TestGoogleTokenLegacyNotConnected(t *testing.T) {
+	h := newTestHandler(t, newFakeStore())
 	r := httptest.NewRequest("GET", "/api/v1/direct/google/token", nil)
+	r.Header.Set("Authorization", "Bearer "+googleJWT(t, "u1"))
 	w := httptest.NewRecorder()
-	h.Token(w, r)
+	h.GoogleTokenLegacy(w, r)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("no account → 404, got %d", w.Code)
+	}
+}
+
+func TestNoAuth(t *testing.T) {
+	h := newTestHandler(t, newFakeStore())
+	r := httptest.NewRequest("GET", "/api/v1/direct/accounts", nil)
+	w := httptest.NewRecorder()
+	h.ListAccounts(w, r)
 	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("no auth should → 401, got %d", w.Code)
+		t.Fatalf("no auth → 401, got %d", w.Code)
 	}
 }
 

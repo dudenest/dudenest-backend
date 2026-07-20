@@ -25,46 +25,57 @@ var (
 	httpClient        = http.DefaultClient
 )
 
-// drive.file (files created by this app) + openid email (verify Drive account == Dudenest account).
-const driveScope = "openid email https://www.googleapis.com/auth/drive.file"
-
-// Handler wires the direct-mode Google OAuth endpoints.
-type Handler struct {
-	Store        Store
-	ClientID     string
-	ClientSecret string
-	RedirectURI  string // https://api.dudenest.com/auth/callback/google/drive
-	AppURL       string // https://dudenest.com — open-redirect guard target
-	stateSecret  []byte // = JWT_SECRET bytes, HMAC for state integrity
-	aead         cipher.AEAD
+// providerConfig — per-provider OAuth. MP1 = tylko google; MP2+ dodaje onedrive/dropbox/mega.
+type providerConfig struct {
+	authURL, tokenURL, userinfoURL, revokeURL string
+	scope, clientID, clientSecret             string
 }
 
-// NewHandler builds a Handler, deriving the AES-GCM cipher from the base64 key (env DRIVE_TOKEN_ENC_KEY).
-func NewHandler(store Store, encKeyB64, clientID, clientSecret, redirectURI, appURL, jwtSecret string) (*Handler, error) {
+// Handler — direct-mode OAuth, MULTI-KONTO / multi-provider.
+type Handler struct {
+	Store        Store
+	AppURL       string // https://dudenest.com — open-redirect guard
+	RedirectBase string // https://api.dudenest.com/auth/callback  (+ "/{provider}/drive")
+	stateSecret  []byte
+	aead         cipher.AEAD
+	providers    map[string]providerConfig
+}
+
+// NewHandler buduje Handler. Dla MP1 rejestruje providera google (URL-e z package vars → testowalne).
+func NewHandler(store Store, encKeyB64, googleClientID, googleClientSecret, redirectBase, appURL, jwtSecret string) (*Handler, error) {
 	aead, err := NewCipher(encKeyB64)
 	if err != nil {
 		return nil, err
 	}
 	return &Handler{
-		Store: store, ClientID: clientID, ClientSecret: clientSecret,
-		RedirectURI: redirectURI, AppURL: appURL, stateSecret: []byte(jwtSecret), aead: aead,
+		Store: store, AppURL: appURL, RedirectBase: redirectBase,
+		stateSecret: []byte(jwtSecret), aead: aead,
+		providers: map[string]providerConfig{
+			"google": {
+				authURL: googleAuthURL, tokenURL: googleTokenURL,
+				userinfoURL: googleUserinfoURL, revokeURL: googleRevokeURL,
+				scope:    "openid email https://www.googleapis.com/auth/drive.file",
+				clientID: googleClientID, clientSecret: googleClientSecret,
+			},
+		},
 	}, nil
 }
 
 func (h *Handler) encrypt(pt []byte) ([]byte, error) { return Encrypt(h.aead, pt) }
 func (h *Handler) decrypt(ct []byte) ([]byte, error) { return Decrypt(h.aead, ct) }
+func (h *Handler) redirectURI(provider string) string { return h.RedirectBase + "/" + provider + "/drive" }
 
-// ─── State (signed, short-lived): carries user identity + return_url through the redirect ──
+// ─── State (podpisany, krótki): niesie user + provider + return_url przez redirect ──
 
 type stateData struct {
-	Sub   string `json:"s"`
-	Email string `json:"e"`
-	Ret   string `json:"r"`
-	Exp   int64  `json:"x"`
+	Sub      string `json:"s"`
+	Provider string `json:"p"`
+	Ret      string `json:"r"`
+	Exp      int64  `json:"x"`
 }
 
-func (h *Handler) signState(sub, email, ret string) string {
-	raw, _ := json.Marshal(stateData{Sub: sub, Email: email, Ret: ret, Exp: time.Now().Add(10 * time.Minute).Unix()})
+func (h *Handler) signState(sub, provider, ret string) string {
+	raw, _ := json.Marshal(stateData{Sub: sub, Provider: provider, Ret: ret, Exp: time.Now().Add(10 * time.Minute).Unix()})
 	payload := base64.RawURLEncoding.EncodeToString(raw)
 	return payload + "." + h.hmac(payload)
 }
@@ -91,7 +102,6 @@ func (h *Handler) hmac(msg string) string {
 	return base64.RawURLEncoding.EncodeToString(m.Sum(nil))
 }
 
-// safeReturn prevents open redirect: only our own app origins allowed.
 func (h *Handler) safeReturn(ret string) string {
 	if ret != "" && (strings.HasPrefix(ret, h.AppURL) || strings.HasPrefix(ret, "https://app.dudenest.com")) {
 		return ret
@@ -101,48 +111,68 @@ func (h *Handler) safeReturn(ret string) string {
 
 // ─── Handlers ──────────────────────────────────────────────────────────────
 
-// StartDrive: GET /auth/google/drive?token=<jwt>&return_url=... → redirect to Google consent (offline).
-// Auth via query token (a redirect can't carry a Bearer header); identity travels in signed state.
-func (h *Handler) StartDrive(w http.ResponseWriter, r *http.Request) {
+// Start zwraca handler dla USTALONEGO providera (trasy legacy/jawne). StartConnect czyta {provider} z path.
+func (h *Handler) Start(provider string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) { h.startConnect(w, r, provider) }
+}
+func (h *Handler) StartConnect(w http.ResponseWriter, r *http.Request) {
+	h.startConnect(w, r, r.PathValue("provider"))
+}
+
+// startConnect: redirect do zgody providera (offline → refresh token).
+func (h *Handler) startConnect(w http.ResponseWriter, r *http.Request, provider string) {
+	pc, ok := h.providers[provider]
+	if !ok {
+		http.Error(w, "unknown provider", http.StatusNotFound)
+		return
+	}
 	claims, err := auth.ValidateJWT(r.URL.Query().Get("token"))
 	if err != nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	if claims.Provider != "google" {
-		http.Error(w, "direct mode requires Google login", http.StatusBadRequest)
-		return
-	}
 	ret := h.safeReturn(r.URL.Query().Get("return_url"))
 	params := url.Values{
-		"client_id":              {h.ClientID},
-		"redirect_uri":           {h.RedirectURI},
+		"client_id":              {pc.clientID},
+		"redirect_uri":           {h.redirectURI(provider)},
 		"response_type":          {"code"},
-		"scope":                  {driveScope},
-		"access_type":            {"offline"},   // → refresh token
-		"prompt":                 {"consent"},   // force refresh token even on repeat consent
+		"scope":                  {pc.scope},
+		"access_type":            {"offline"},
+		"prompt":                 {"consent"}, // wymusza refresh token + świadomy wybór konta (multi-konto)
 		"include_granted_scopes": {"true"},
-		"state":                  {h.signState(claims.Sub, claims.Email, ret)},
+		"state":                  {h.signState(claims.Sub, provider, ret)},
 	}
-	http.Redirect(w, r, googleAuthURL+"?"+params.Encode(), http.StatusFound)
+	http.Redirect(w, r, pc.authURL+"?"+params.Encode(), http.StatusFound)
 }
 
-// CallbackDrive: GET /auth/callback/google/drive?code=&state= → exchange, verify account, store refresh.
-func (h *Handler) CallbackDrive(w http.ResponseWriter, r *http.Request) {
-	st, ok := h.verifyState(r.URL.Query().Get("state"))
+// Callback zwraca handler dla USTALONEGO providera (trasy legacy/jawne). CallbackConnect czyta {provider}.
+func (h *Handler) Callback(provider string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) { h.callbackConnect(w, r, provider) }
+}
+func (h *Handler) CallbackConnect(w http.ResponseWriter, r *http.Request) {
+	h.callbackConnect(w, r, r.PathValue("provider"))
+}
+
+// callbackConnect: exchange kodu + zapis KONTA (nie nadpisuje istniejących — multi-konto).
+func (h *Handler) callbackConnect(w http.ResponseWriter, r *http.Request, provider string) {
+	pc, ok := h.providers[provider]
 	if !ok {
+		http.Error(w, "unknown provider", http.StatusNotFound)
+		return
+	}
+	st, ok := h.verifyState(r.URL.Query().Get("state"))
+	if !ok || st.Provider != provider {
 		http.Error(w, "invalid state", http.StatusBadRequest)
 		return
 	}
-	tok, err := h.exchangeCode(r.URL.Query().Get("code"))
+	tok, err := h.exchangeCode(provider, pc, r.URL.Query().Get("code"))
 	if err != nil || tok.AccessToken == "" {
 		http.Error(w, "token exchange failed", http.StatusBadGateway)
 		return
 	}
-	email := h.userinfoEmail(tok.AccessToken)
-	if email == "" || !strings.EqualFold(email, st.Email) {
-		// Isolation: the connected Google account MUST be the Dudenest user's own account.
-		http.Error(w, "google account does not match your Dudenest account", http.StatusForbidden)
+	email := h.userinfoEmail(pc, tok.AccessToken)
+	if email == "" {
+		http.Error(w, "could not read account email", http.StatusBadGateway)
 		return
 	}
 	if tok.RefreshToken == "" {
@@ -154,12 +184,13 @@ func (h *Handler) CallbackDrive(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "encrypt failed", http.StatusInternalServerError)
 		return
 	}
-	if err := h.Store.Upsert(r.Context(), st.Sub, sealed, email); err != nil {
+	acc := Account{AccountID: provider + ":" + email, UserID: st.Sub, Provider: provider, Email: email, RefreshEnc: sealed}
+	if err := h.Store.Upsert(r.Context(), acc); err != nil {
 		log.Printf("directauth: upsert failed: %v", err)
 		http.Error(w, "store failed", http.StatusInternalServerError)
 		return
 	}
-	log.Printf("directauth: connected drive for %s (%s)", st.Sub, email)
+	log.Printf("directauth: connected %s for %s", acc.AccountID, st.Sub)
 	sep := "?"
 	if strings.Contains(st.Ret, "?") {
 		sep = "&"
@@ -167,29 +198,85 @@ func (h *Handler) CallbackDrive(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, st.Ret+sep+"drive=connected", http.StatusFound)
 }
 
-// Token: GET /api/v1/direct/google/token (Bearer JWT) → fresh drive.file access token (no popup).
-func (h *Handler) Token(w http.ResponseWriter, r *http.Request) {
+// ListAccounts: GET /api/v1/direct/accounts → [{account_id, provider, email}] usera.
+func (h *Handler) ListAccounts(w http.ResponseWriter, r *http.Request) {
 	claims := bearer(r)
 	if claims == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	sealed, email, err := h.Store.Get(r.Context(), claims.Sub)
-	if err == ErrNotFound {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not_connected"})
+	accs, err := h.Store.ListByUser(r.Context(), claims.Sub)
+	if err != nil {
+		http.Error(w, "store error", http.StatusInternalServerError)
+		return
+	}
+	out := make([]map[string]string, 0, len(accs))
+	for _, a := range accs {
+		out = append(out, map[string]string{"account_id": a.AccountID, "provider": a.Provider, "email": a.Email})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"accounts": out})
+}
+
+// AccountToken: GET /api/v1/direct/accounts/{id}/token → świeży access token dla konta.
+func (h *Handler) AccountToken(w http.ResponseWriter, r *http.Request) {
+	claims := bearer(r)
+	if claims == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	acc, err := h.Store.Get(r.Context(), r.PathValue("id"))
+	if err == ErrNotFound || (err == nil && acc.UserID != claims.Sub) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not_connected"}) // cudze konto = jak brak
 		return
 	} else if err != nil {
 		http.Error(w, "store error", http.StatusInternalServerError)
 		return
 	}
-	refresh, err := h.decrypt(sealed)
+	h.mintAndWrite(w, r, acc)
+}
+
+// GoogleTokenLegacy: GET /api/v1/direct/google/token — backward-compat (stary Flutter, 1 konto).
+// Bierze PIERWSZE konto google usera. Usunąć po migracji klientów na endpointy multi-konto.
+func (h *Handler) GoogleTokenLegacy(w http.ResponseWriter, r *http.Request) {
+	claims := bearer(r)
+	if claims == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	accs, err := h.Store.ListByUser(r.Context(), claims.Sub)
+	if err != nil {
+		http.Error(w, "store error", http.StatusInternalServerError)
+		return
+	}
+	for _, a := range accs {
+		if a.Provider == "google" {
+			full, err := h.Store.Get(r.Context(), a.AccountID)
+			if err != nil {
+				http.Error(w, "store error", http.StatusInternalServerError)
+				return
+			}
+			h.mintAndWrite(w, r, full)
+			return
+		}
+	}
+	writeJSON(w, http.StatusNotFound, map[string]string{"error": "not_connected"})
+}
+
+// mintAndWrite: refresh → access token; invalid_grant → skasuj konto + 404.
+func (h *Handler) mintAndWrite(w http.ResponseWriter, r *http.Request, acc Account) {
+	pc, ok := h.providers[acc.Provider]
+	if !ok {
+		http.Error(w, "unknown provider", http.StatusInternalServerError)
+		return
+	}
+	refresh, err := h.decrypt(acc.RefreshEnc)
 	if err != nil {
 		http.Error(w, "decrypt error", http.StatusInternalServerError)
 		return
 	}
-	access, expiresIn, invalid := h.refreshAccess(string(refresh))
+	access, expiresIn, invalid := h.refreshAccess(pc, string(refresh))
 	if invalid {
-		_ = h.Store.Delete(r.Context(), claims.Sub) // refresh token revoked → force reconnect
+		_ = h.Store.Delete(r.Context(), acc.AccountID) // odwołany → wymuś reconnect
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not_connected"})
 		return
 	}
@@ -197,26 +284,31 @@ func (h *Handler) Token(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "refresh failed", http.StatusBadGateway)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"access_token": access, "expires_in": expiresIn, "email": email})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"access_token": access, "expires_in": expiresIn, "email": acc.Email, "provider": acc.Provider,
+	})
 }
 
-// Disconnect: DELETE /api/v1/direct/google/token → revoke at Google + delete stored token.
-func (h *Handler) Disconnect(w http.ResponseWriter, r *http.Request) {
+// DeleteAccount: DELETE /api/v1/direct/accounts/{id} → revoke + delete (tylko własne).
+func (h *Handler) DeleteAccount(w http.ResponseWriter, r *http.Request) {
 	claims := bearer(r)
 	if claims == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	if sealed, _, err := h.Store.Get(r.Context(), claims.Sub); err == nil {
-		if refresh, err := h.decrypt(sealed); err == nil {
-			_, _ = httpClient.PostForm(googleRevokeURL, url.Values{"token": {string(refresh)}})
+	id := r.PathValue("id")
+	if acc, err := h.Store.Get(r.Context(), id); err == nil && acc.UserID == claims.Sub {
+		if pc, ok := h.providers[acc.Provider]; ok && pc.revokeURL != "" {
+			if refresh, e := h.decrypt(acc.RefreshEnc); e == nil {
+				_, _ = httpClient.PostForm(pc.revokeURL, url.Values{"token": {string(refresh)}})
+			}
 		}
+		_ = h.Store.Delete(r.Context(), id)
 	}
-	_ = h.Store.Delete(r.Context(), claims.Sub)
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// ─── Google calls ────────────────────────────────────────────────────────────
+// ─── Google calls (per providerConfig) ───────────────────────────────────────
 
 type googleToken struct {
 	AccessToken  string `json:"access_token"`
@@ -225,17 +317,17 @@ type googleToken struct {
 	Error        string `json:"error"`
 }
 
-func (h *Handler) exchangeCode(code string) (googleToken, error) {
-	return postToken(url.Values{
-		"code": {code}, "client_id": {h.ClientID}, "client_secret": {h.ClientSecret},
-		"redirect_uri": {h.RedirectURI}, "grant_type": {"authorization_code"},
+func (h *Handler) exchangeCode(provider string, pc providerConfig, code string) (googleToken, error) {
+	return postToken(pc.tokenURL, url.Values{
+		"code": {code}, "client_id": {pc.clientID}, "client_secret": {pc.clientSecret},
+		"redirect_uri": {h.redirectURI(provider)}, "grant_type": {"authorization_code"},
 	})
 }
 
-// refreshAccess returns (accessToken, expiresIn, invalidGrant). invalidGrant=true → token revoked.
-func (h *Handler) refreshAccess(refresh string) (string, int, bool) {
-	tok, err := postToken(url.Values{
-		"client_id": {h.ClientID}, "client_secret": {h.ClientSecret},
+// refreshAccess: (access, expiresIn, invalidGrant).
+func (h *Handler) refreshAccess(pc providerConfig, refresh string) (string, int, bool) {
+	tok, err := postToken(pc.tokenURL, url.Values{
+		"client_id": {pc.clientID}, "client_secret": {pc.clientSecret},
 		"refresh_token": {refresh}, "grant_type": {"refresh_token"},
 	})
 	if err != nil {
@@ -247,8 +339,8 @@ func (h *Handler) refreshAccess(refresh string) (string, int, bool) {
 	return tok.AccessToken, tok.ExpiresIn, false
 }
 
-func postToken(form url.Values) (googleToken, error) {
-	resp, err := httpClient.PostForm(googleTokenURL, form)
+func postToken(tokenURL string, form url.Values) (googleToken, error) {
+	resp, err := httpClient.PostForm(tokenURL, form)
 	if err != nil {
 		return googleToken{}, err
 	}
@@ -259,8 +351,8 @@ func postToken(form url.Values) (googleToken, error) {
 	return t, nil
 }
 
-func (h *Handler) userinfoEmail(accessToken string) string {
-	req, _ := http.NewRequest("GET", googleUserinfoURL, nil)
+func (h *Handler) userinfoEmail(pc providerConfig, accessToken string) string {
+	req, _ := http.NewRequest("GET", pc.userinfoURL, nil)
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	resp, err := httpClient.Do(req)
 	if err != nil {
